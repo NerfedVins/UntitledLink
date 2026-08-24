@@ -20,13 +20,20 @@ if errorlevel 1 (
     )
 )
 
-REM yt-dlp breaks whenever YouTube/X change something, so refresh it every
-REM launch. Output is swallowed: pip warns about unrelated broken packages in
-REM site-packages and that noise is not this app's business. A real failure is
-REM reported below.
-echo Updating yt-dlp...
-python -m pip install -q --upgrade --disable-pip-version-check yt-dlp >nul 2>&1
-if errorlevel 1 echo   update skipped - offline, or run the pip command by hand to see why.
+REM pythonw is the console-less python: it launches the window and nothing
+REM else, so this box closes instead of sitting behind the app all session.
+REM A crash before the window appears has no console to print to, so the app
+REM writes crash.log beside itself and shows the error in a dialog.
+REM
+REM yt-dlp refreshes itself from inside the app now, on a background thread,
+REM which is what the "Updating yt-dlp..." line here used to be for.
+where pythonw >nul 2>&1
+if errorlevel 1 goto :noconsole_missing
+start "" pythonw convertex.py
+exit /b 0
 
+:noconsole_missing
+REM No pythonw (a stripped or non-standard install). Fall back to python and
+REM keep the window, because it is the only place an error could show up.
 python convertex.py
 if errorlevel 1 pause

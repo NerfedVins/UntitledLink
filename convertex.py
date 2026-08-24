@@ -33,7 +33,7 @@ from PIL import ImageFile
 # input would reject exactly the cases this app creates deliberately.
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 
-from i18n import COOKIE_BROWSERS, LANGUAGES, Tr
+from i18n import COOKIE_BROWSERS, LANGUAGES, NO_COOKIES, Tr
 
 APP = "convertex"
 VERSION = "0.1.0"
@@ -230,6 +230,38 @@ def fetch_ffmpeg(progress) -> str:
         raise RuntimeError("archive did not contain ffmpeg")
     os.chmod(path, 0o755)
     return path
+
+
+def update_ytdlp(log) -> None:
+    """Refresh yt-dlp quietly, in the background.
+
+    It breaks whenever a site changes its markup, so the copy that worked last
+    week may not work today - which is why this runs every launch rather than
+    waiting for a scan to fail. run.bat used to do it and needed a console
+    window to do it in; CREATE_NO_WINDOW means nothing flashes up here.
+
+    The new version applies at the next launch: yt-dlp is already imported by
+    the time a scan happens, and swapping the files under it would not change
+    that. A frozen build carries its own copy and cannot pip into itself.
+    """
+    if getattr(sys, "frozen", False):
+        return
+    import subprocess
+    try:
+        done = subprocess.run(
+            [sys.executable, "-m", "pip", "install", "--upgrade", "-q",
+             "--disable-pip-version-check", "yt-dlp"],
+            capture_output=True, text=True, timeout=180,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    except (OSError, subprocess.SubprocessError) as exc:
+        log(f"yt-dlp update skipped :: {exc}", "warn")
+        return
+    if done.returncode:
+        # Offline is the usual reason and is not worth a red line - the copy
+        # already installed still works for every site that has not changed.
+        log("yt-dlp update skipped - offline, or pip refused", "warn")
+    else:
+        log("yt-dlp up to date", "info")
 
 
 # --------------------------------------------------------------------------
@@ -1169,7 +1201,8 @@ class App:
             value=self.prefs.get("outdir") or DEFAULT_OUTDIR)
         self.proxy_var = tk.StringVar(value=self.prefs.get("proxy", ""))
         self.clean_var = tk.BooleanVar(value=self.prefs.get("strip_metadata", True))
-        self.cookies_var = tk.StringVar(value=self.prefs.get("cookies", ""))
+        self.cookies_var = tk.StringVar(
+            value=self.prefs.get("cookies") or NO_COOKIES)
         self.quality_var = tk.StringVar(value=self.prefs.get("quality", "best"))
         # StringVar, not IntVar: an IntVar raises TclError the moment it holds
         # anything non-numeric, and both a hand-edited settings file and the
@@ -1189,6 +1222,7 @@ class App:
         self.build()
         root.protocol("WM_DELETE_WINDOW", self.close)
         self.tick = root.after(80, self.pump)
+        threading.Thread(target=update_ytdlp, args=(self.log,), daemon=True).start()
         if not ffmpeg_path():
             # Fetch it once, quietly, in the background. Every resolution above
             # 360p and the whole mp3 path depend on it, so waiting for the user
@@ -1208,7 +1242,7 @@ class App:
             "proxy": self.proxy_var.get().strip(),
             "quality": self.quality_var.get(),
             "strip_metadata": bool(self.clean_var.get()),
-            "cookies": self.cookies_var.get(),
+            "cookies": self.cookies(),
             "attempts": self.attempts(),
             "parallel": self.workers(),
         })
@@ -1218,6 +1252,15 @@ class App:
 
     def workers(self) -> int:
         return clamp_int(self.parallel_var.get(), PARALLEL, 1, MAX_PARALLEL)
+
+    def cookies(self) -> str:
+        """The browser to lift cookies from, or "" for none.
+
+        The dropdown shows a word for the off position so the box is never
+        blank; everything downstream still wants an empty string.
+        """
+        chosen = self.cookies_var.get()
+        return "" if chosen == NO_COOKIES else chosen
 
     def pick_font(self) -> str:
         fams = set(tkfont.families(self.root))
@@ -1254,6 +1297,23 @@ class App:
         st.configure("T.TCombobox", fieldbackground=C["panel"], background=C["panel"],
                      foreground=C["fg"], arrowcolor=C["dim"], bordercolor=C["line"],
                      selectbackground=C["panel"], selectforeground=C["fg"])
+        # These boxes are state="readonly" for their whole life, and clam maps
+        # readonly to a light grey field and readonly+focus to blue - both of
+        # which won over the configure() above and left the chosen value
+        # unreadable. Mapping the same states here is the only way to win.
+        # Order matters: the first matching spec is the one that applies, so
+        # focus sits ahead of readonly to tint the current value green.
+        st.map("T.TCombobox",
+               fieldbackground=[("readonly", C["panel"]), ("disabled", C["panel"])],
+               background=[("readonly", C["panel"]), ("active", C["panel"])],
+               foreground=[("disabled", C["dim"]), ("focus", C["green"]),
+                           ("readonly", C["fg"])],
+               selectbackground=[("readonly", C["panel"])],
+               selectforeground=[("focus", C["green"]), ("readonly", C["fg"])],
+               arrowcolor=[("active", C["green"]), ("readonly", C["dim"])],
+               bordercolor=[("focus", C["green"]), ("readonly", C["line"])],
+               lightcolor=[("focus", C["green"]), ("readonly", C["panel"])],
+               darkcolor=[("focus", C["green"]), ("readonly", C["panel"])])
         self.root.option_add("*TCombobox*Listbox.background", C["panel"])
         self.root.option_add("*TCombobox*Listbox.foreground", C["fg"])
         self.root.option_add("*TCombobox*Listbox.selectBackground", C["line"])
@@ -1669,8 +1729,8 @@ class App:
         bits = []
         if self.proxy_var.get().strip():
             bits.append("proxy")
-        if self.cookies_var.get():
-            bits.append(f"cookies:{self.cookies_var.get()}")
+        if self.cookies():
+            bits.append(f"cookies:{self.cookies()}")
         if self.clean_var.get():
             bits.append("strip")
         if not ffmpeg_path():
@@ -1876,7 +1936,7 @@ class App:
         self.log(f"scan {url}")
         try:
             items = scan(url, self.proxy_var.get().strip() or None, self.say,
-                         self.cookies_var.get(),
+                         self.cookies(),
                          self.t("no_video", site=urlparse(url).netloc),
                          self.t("try_cookies"))
             self.q.put(("items", items, None))
@@ -1912,7 +1972,7 @@ class App:
             target=self._dl_worker,
             args=(picks, outdir, self.proxy_var.get().strip() or None,
                   self.quality_var.get(), self.clean_var.get(),
-                  self.cookies_var.get(), self.workers(), self.attempts()),
+                  self.cookies(), self.workers(), self.attempts()),
             daemon=True).start()
 
     def _dl_worker(self, picks, outdir, proxy, quality, clean, cookies="",
@@ -2206,6 +2266,11 @@ def selftest():
     for _code in _langs:
         assert "{site}" in _strings[_code]["no_video"], f"{_code} lost the site slot"
         assert "cookies" in _strings[_code]["try_cookies"].lower() or _code != "en"
+    # only the two languages that are actually offered, but every translation
+    # still in STRINGS must stay complete - that is what makes putting one back
+    # a one-line change
+    assert set(_langs) == {"en", "el"}, _langs
+    assert {"es", "de"} <= set(_strings), "shelved translations must survive"
     tr = _Tr("el")
     assert tr("found", n=3) != _strings["en"]["found"], "greek must differ"
     assert tr("unknown_key_xyz") == "unknown_key_xyz", "missing key must not crash"
@@ -2378,6 +2443,21 @@ def ui_selftest():
         app.attempts_var.set("3")
         app.parallel_var.set("4")
 
+        # the cookie dropdown shows a word for "off"; everything downstream
+        # still wants an empty string, and an old settings file holds ""
+        assert app.cookies() == "", app.cookies()
+        app.cookies_var.set("firefox")
+        assert app.cookies() == "firefox"
+        app.cookies_var.set(NO_COOKIES)
+        assert app.cookies() == ""
+        assert COOKIE_BROWSERS[0] == NO_COOKIES and NO_COOKIES
+
+        # readonly is the only state these boxes are ever in, so clam's light
+        # grey field would make every chosen value unreadable
+        for state in (["readonly"], ["readonly", "focus"]):
+            assert ttk.Style().lookup("T.TCombobox", "fieldbackground",
+                                      state) == C["panel"], state
+
         # every language change used to leave another pump loop running
         pending = len(root.tk.call("after", "info"))
         for code in LANGUAGES:
@@ -2403,9 +2483,27 @@ def ui_selftest():
 def main():
     if "--selftest" in sys.argv:
         return selftest()
-    root = tk.Tk()
-    App(root)
-    root.mainloop()
+    try:
+        root = tk.Tk()
+        App(root)
+        root.mainloop()
+    except Exception:
+        # Launched with pythonw there is no console, so a crash before the
+        # window appears would otherwise be nothing at all: no error, no
+        # window, no clue. Leave a file and say so on screen.
+        report = traceback.format_exc()
+        try:
+            with open(os.path.join(DATA_DIR, "crash.log"), "a",
+                      encoding="utf-8") as fh:
+                stamp = time.strftime("%Y-%m-%d %H:%M:%S")
+                print("", stamp, report, sep="\n", file=fh)
+        except OSError:
+            pass
+        try:
+            messagebox.showerror(APP, report[-1500:])
+        except Exception:
+            pass
+        raise
 
 
 if __name__ == "__main__":

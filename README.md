@@ -4,12 +4,23 @@ Paste a link, see what is downloadable, take it clean.
 
 ## Run
 
-Double-click **`run.bat`**. It installs anything missing, refreshes yt-dlp, and
-opens the app. Nothing else to set up.
+Double-click **`run.bat`**. It installs anything missing and opens the app.
+Nothing else to set up.
 
-pip output during the refresh is swallowed on purpose - it warns about unrelated
-half-installed packages elsewhere in your `site-packages`, which is not this
-app's business. A genuine failure still prints one line.
+**No console window sticks around.** The app is launched with `pythonw`, the
+console-less python, and `run.bat` closes as soon as it has done so. A terminal
+only appears if a dependency is actually missing, and only for as long as the
+install takes.
+
+yt-dlp refreshes itself from inside the app, on a background thread, with no
+window of its own - it breaks whenever a site changes its markup, so a copy that
+worked last week may not work today. The new version applies at the next launch.
+Failure there is a line in the log, not an interruption: being offline is the
+usual reason and the installed copy still works for every site that has not
+changed.
+
+Because `pythonw` has no console to print to, a crash before the window appears
+writes `crash.log` next to the app and shows the error in a dialog.
 
 ### Standalone exe
 
@@ -211,9 +222,13 @@ so your download folder is the one you picked last time.
 
 ### Language
 
-English, Ελληνικά, Español, Deutsch. The window redraws in place when you change
-it - your scan results and marks survive. Adding a language means adding one dict
-to `i18n.py`; missing keys fall back to English rather than crashing.
+English and Ελληνικά. The window redraws in place when you change it - your scan
+results and marks survive. Missing keys fall back to English rather than crashing,
+so a partial translation is usable.
+
+Spanish and German are translated and still sit in `i18n.py`, just not offered:
+putting either back in front of the user is adding its code to the `LANGUAGES`
+dict, nothing else. A new language is one more dict of strings.
 
 Log lines stay English on purpose. They are diagnostics, and an English log is
 the one you can paste into a bug report or search for.

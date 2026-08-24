@@ -8,10 +8,17 @@ Adding a language means adding one dict below. Missing keys fall back to
 English rather than crashing, so a partial translation is usable.
 """
 
-LANGUAGES = {"en": "English", "el": "Ελληνικά", "es": "Español", "de": "Deutsch"}
+# Only what is offered in the settings dropdown. STRINGS below still carries
+# the Spanish and German translations - putting either back in front of the
+# user is adding its code to this dict, nothing else.
+LANGUAGES = {"en": "English", "el": "Ελληνικά"}
 
 # Browsers yt-dlp can lift cookies from. "" means do not touch any of them.
-COOKIE_BROWSERS = ["", "chrome", "firefox", "edge", "brave", "opera", "vivaldi"]
+# The first entry is "no cookies". It is a word rather than "" because an
+# empty combobox reads as "nothing loaded yet", not as a choice you made.
+NO_COOKIES = "none"
+COOKIE_BROWSERS = [NO_COOKIES, "chrome", "firefox", "edge", "brave",
+                   "opera", "vivaldi"]
 
 STRINGS = {
     "en": {

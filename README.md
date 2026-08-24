@@ -1,0 +1,283 @@
+# convertex
+
+Paste a link, see what is downloadable, take it clean.
+
+## Run
+
+Double-click **`run.bat`**. It installs anything missing, refreshes yt-dlp, and
+opens the app. Nothing else to set up.
+
+pip output during the refresh is swallowed on purpose - it warns about unrelated
+half-installed packages elsewhere in your `site-packages`, which is not this
+app's business. A genuine failure still prints one line.
+
+### Standalone exe
+
+`build.bat` produces `dist\convertex.exe`. That one file is the whole program:
+Python, yt-dlp, requests, Pillow and **ffmpeg** are all inside it. The machine
+that runs it needs nothing installed and downloads nothing on first launch.
+
+Three flags matter and are easy to lose:
+
+- `--collect-all yt_dlp` - the site extractors are imported lazily by name, so
+  without this the exe silently supports only a handful of sites.
+- `--collect-all certifi` - the CA bundle, or every HTTPS request fails once frozen.
+- `--add-binary binfmpeg.exe;bin` - without it the exe falls back to
+  downloading ffmpeg on first run, which defeats the point.
+
+The build refuses to continue if ffmpeg is missing rather than quietly shipping
+a crippled exe.
+
+**Where settings go.** Beside the exe when that folder is writable, so a copy on
+a USB stick stays self-contained. In `%APPDATA%\convertex` when it is not - an exe
+in Program Files cannot write next to itself, and silently losing every setting
+is a miserable way to discover that.
+
+## What it does
+
+- **Media sites** (YouTube, X/Twitter, Instagram, TikTok, Reddit, ~1800 more) go
+  through `yt-dlp`. A single video is expanded into **one row per resolution with
+  its real byte size** - 2160p / 1440p / 1080p / 720p / down to audio-only - so you
+  pick by what it actually costs, not by guessing.
+- **Any other page** is scraped for images, video, audio, pdf, archives.
+- **Images auto-upgrade**: thumbnails are resolved to their full-resolution
+  original (WordPress `-800x600`, MediaWiki `/thumb/.../500px-`, `?w=` resizers,
+  `:small` on X). Measured: an 89 KB thumbnail became the 4.4 MB original.
+- **Metadata is stripped** before the file lands: EXIF/XMP/IPTC out of JPEG, text
+  chunks out of PNG (both lossless - no re-encoding), container tags out of video
+  via ffmpeg, and the Windows `Zone.Identifier` stream that records the source URL
+  of every download.
+
+## ffmpeg
+
+It is there by default. `build.bat` bakes it into the exe, and a plain
+`python convertex.py` fetches it once in the background on first launch, so the
+first thing you do already works. The `get ffmpeg` button stays as a manual retry
+and disappears once ffmpeg is found - bundled, in `bin\`, or on your PATH.
+
+It matters because above roughly 360p YouTube ships video and audio as **separate
+streams** that have to be merged, and mp3 needs re-encoding. Rows that cannot run
+without it are marked `*`; the mark disappears once it is installed.
+
+## Audio and mp3
+
+The resolution list ends with two audio rows: the **source track** as the site
+serves it (m4a/opus, no re-encoding, best fidelity) and **mp3 at 320 kbps**
+re-encoded for players that demand mp3. The quality dropdown has `mp3` too, for
+playlists.
+
+Verified on a real download: `bit_rate=320027`, and `format_tags` comes back
+empty - no encoder signature, no source URL.
+
+## Marking, preview, log
+
+**Click a row to mark it.** Marked rows show `[x]` and the status line keeps a
+running total - `3 marked :: 412.6M total` - so you can queue two videos and ten
+photos in one go and see what it costs before starting. Download takes the marked
+rows; with nothing marked it takes everything. Ctrl+A marks all, Ctrl+A again
+clears.
+
+The **preview pane** on the right shows the selected item: the image itself for
+scraped pictures, the site's own thumbnail for videos, plus type, size and source
+URL. Thumbnails load in the background and are cached, and the fetch is capped so
+previewing never pulls a 40 MB original.
+
+The **log panel** records every scan and download - what was tried, what was
+saved, and why anything failed, with a full traceback for unexpected errors. It
+**opens by itself on any failure**, so a summary line like `0 saved, 1 failed`
+never leaves you guessing. `log` toggles it, `copy log` puts the whole thing on
+the clipboard. It lives in memory only and is not written to disk.
+
+## Keyboard
+
+Ctrl+V / Ctrl+C / Ctrl+X / Ctrl+A are wired to **physical key codes**, not to the
+letters Tk sees. Tk's built-in bindings match the keysym, so on a Greek (or any
+non-Latin) layout the V key reports a Greek letter and pasting silently does
+nothing. Every field also has a **right-click menu** with cut / copy / paste /
+select all. Pasted links get surrounding whitespace and newlines trimmed.
+
+## Cancelling a stuck download
+
+**Click a row while a download is running and it leaves the queue.** The one in
+flight aborts at its next chunk; anything still queued is skipped. That is the way
+out when a server stops responding mid-transfer. The row shows `[-]` and the
+partial bytes stay in the `.part` file, so restarting it later resumes rather than
+starting over.
+
+**`stop`** appears next to `download` while it runs and cancels everything at once.
+Sockets also give up after 60 seconds of silence, so a dead connection now fails
+and retries instead of hanging forever.
+
+**`refresh`** re-scans the link already in the box. **`clear`** empties the box
+and the results with it.
+
+## Rate limits
+
+Parallelism aimed at one host is what trips rate limiters, so at most **2
+connections per host** run at once no matter how high the worker count goes. A
+batch spread over several sites still runs at full width.
+
+A `429` is treated as an instruction, not a blip: 5s, 15s, 45s between tries
+rather than 1s, 2s, 4s. A `Retry-After` header is obeyed when it asks for longer
+and ignored when it asks for less than that floor - hosts that say "1 second"
+while still refusing just burn the retry budget.
+
+## Parallel downloads
+
+Four files at once by default, 1-8 in settings. The status line, the progress bar
+and the `download` button sit together at the bottom, with the log controls hard
+right:
+
+```
+3/10  4 running  5.2M/s  eta 1m20s        [====----]  download
+```
+
+The bar tracks the **whole batch**, not one file. The log keeps the per-file
+detail - what started, what saved, what failed and why.
+
+Two races only parallel work exposes, both closed:
+
+- **Filename claim.** Two workers could pick the same free name in the gap
+  between checking and writing. Claiming the name and moving the file into it is
+  now one locked step.
+- **`.part` collision.** Partials were keyed by filename, so two different files
+  called `photo.jpg` appended into each other. They are keyed by URL now, which
+  also keeps resume working - the same link maps to the same partial.
+
+## What each row tells you
+
+The **INFO** column carries the technical summary:
+
+```
+1080p   8.1M   2:41  1080x1080  25fps  avc1
+audio   2.6M   2:41  opus  134k  48kHz  stereo
+mp3     2.6M   2:41  mp3  320k
+image   4.4M   3640x2226
+```
+
+Image dimensions are read from the file's **header only** - a 64 KB ranged
+request, not the whole download. They fill in when you select the row.
+
+The preview pane carries what does not fit in a column: uploader, upload date,
+duration, views, likes, codec, bitrate, container, and the source URL.
+
+### One thing worth knowing about image sizes
+
+A scraped thumbnail is previewed at thumbnail size but downloaded at full size,
+because convertex upgrades the URL. Reporting the preview's dimensions would
+describe the wrong file, so the real ones are fetched separately. When they
+cannot be read the cell stays **empty** rather than showing a number that is not
+what you will get.
+
+## Resume and retry
+
+Interrupted downloads pick up where they stopped. Bytes land in a `.part` file
+next to the target and the next attempt sends an HTTP `Range` header, so a
+connection drop at 90% costs you the last 10%, not the whole file. The `.part`
+only becomes the real file once it is complete.
+
+Each item gets **3 tries** with 1s / 2s backoff, and every retry resumes rather
+than restarting. yt-dlp resumes its own fragments the same way. Failures that
+retrying cannot fix - a resolution needing ffmpeg you do not have - are reported
+immediately instead of burning attempts.
+
+## Settings
+
+`settings.json` sits next to the app and remembers your **download folder**,
+proxy, quality, and the strip-metadata toggle. Written when a download starts and
+when you close the window. It holds preferences only - **no link history**.
+
+Delete the file to reset. If the folder is read-only, the app runs fine and just
+does not remember.
+
+## Settings
+
+The `settings` button next to the quality box opens the dialog: **language**,
+**download folder**, proxy, browser cookies, strip-metadata, and tries per file.
+It also shows where ffmpeg was found. A short line beside the button says what is
+currently on - `proxy  cookies:firefox  strip` - so nothing is silently active.
+
+Everything is written to `settings.json` next to the app and reloaded on start,
+so your download folder is the one you picked last time.
+
+### Language
+
+English, Ελληνικά, Español, Deutsch. The window redraws in place when you change
+it - your scan results and marks survive. Adding a language means adding one dict
+to `i18n.py`; missing keys fall back to English rather than crashing.
+
+Log lines stay English on purpose. They are diagnostics, and an English log is
+the one you can paste into a bug report or search for.
+
+### X / Twitter
+
+yt-dlp's Twitter extractor only handles **video**. A tweet full of photos comes
+back as "No video could be found", which used to fall through to scraping - and
+scraping x.com logged-out returns avatars and interface icons, so it looked like
+the app simply did not work.
+
+convertex now falls back to X's public embed API, the one that powers embedded
+tweets. It returns the real media as JSON, including photos, which are fetched at
+`?name=orig` - the untouched upload, not the display-sized copy.
+
+| What you paste | What happens |
+|---|---|
+| tweet with photos | one row per photo, at original resolution |
+| tweet with video | one row per resolution, up to 1080p |
+| text-only tweet | says so, no junk rows |
+| login-walled tweet | `this post is not publicly viewable - it needs a login` |
+| profile page | says the URL is unsupported |
+
+Each failure gives **one** reason - the most specific one available - plus the
+cookies pointer when cookies could plausibly help.
+
+A **login-walled tweet cannot be reached logged out by any method** - not the
+embed API, not scraping. Browser cookies are the only way in.
+
+### Browser cookies
+
+X, Instagram and private playlists increasingly refuse logged-out access. Setting
+`use cookies from` to your browser lets yt-dlp reuse that session, which is the
+only thing that gets past a login wall.
+
+**This works against anonymity.** Cookies identify you to the site as your own
+account - far more precisely than an IP. Leave it empty unless a link actually
+needs it, and do not combine it with Tor expecting to stay unidentified.
+
+## Anonymity
+
+The **proxy box is the switch**. `socks5://127.0.0.1:9050` for Tor, or any
+VPN/proxy endpoint. It applies to scanning and downloading alike.
+
+The app keeps no history, no cache, no cookies, and sends no telemetry. But with
+the box empty the site sees your real IP - no application can change that. Tor is
+frequently blocked by YouTube and Cloudflare, so expect it to be unreliable there.
+
+## Testing it
+
+```
+python convertex.py --selftest
+```
+
+Checks the metadata strippers, the thumbnail-upgrade rules, the resolution table
+logic, the resume arithmetic, and the settings round-trip. Offline, under a second.
+
+By hand, one link per path:
+
+| Paste this | Expect |
+|---|---|
+| `https://www.youtube.com/watch?v=aqz-KE-bpKQ` | 9 rows, 2160p at ~1.3G down to audio at ~9.8M |
+| `https://en.wikipedia.org/wiki/Cat` | ~199 rows, 137 images, top one ~4.4M (the upgraded original, not the 89K thumb) |
+| any YouTube playlist | one row per video, capped at 200; the quality dropdown applies here |
+| `https://x.com/SpaceX/status/1732824684683784516` | 6 rows, 1080p at ~141M, none needing ffmpeg |
+| a tweet with no video | the reason plus a pointer to cookies, not a list of scraped avatars |
+| a private or geoblocked video | the real reason on the status line, e.g. `Video unavailable` |
+
+To see resume work: start a large download, kill the app mid-transfer, reopen and
+download the same row. It continues from the `.part` file instead of starting over.
+
+Ctrl+A selects everything. Nothing selected means everything gets downloaded.
+Double-click a row downloads it.
+
+Downloading from sites that forbid it in their terms is on you, and the material
+is often copyrighted. yt-dlp itself is legal open source.

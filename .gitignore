@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+bin/
+dist/
+build/
+*.spec
+settings.json
+*.part

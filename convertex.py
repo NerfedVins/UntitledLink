@@ -1348,13 +1348,16 @@ class App:
                      troughcolor=C["panel"], bordercolor=C["panel"],
                      lightcolor=C["green"], darkcolor=C["green"], borderwidth=0)
         for accent in ("green", "cyan", "amber", "red", "dim"):
-            st.configure(f"{accent}.T.TButton", background=C["panel"],
-                         foreground=C[accent], font=(self.mono, 10, "bold"),
-                         borderwidth=0, relief="flat", padding=(14, 5),
-                         focuscolor=C[accent], anchor="center", width=0)
-            st.map(f"{accent}.T.TButton",
-                   background=[("pressed", C["line"]), ("active", C["line"])],
-                   foreground=[("disabled", C["line"])])
+            # "big" is the same button with more presence, for download - the
+            # thing every visit to this window is actually for.
+            for prefix, size, pad_xy in (("", 10, (14, 5)), ("big", 12, (26, 9))):
+                st.configure(f"{prefix}{accent}.T.TButton", background=C["panel"],
+                             foreground=C[accent], font=(self.mono, size, "bold"),
+                             borderwidth=0, relief="flat", padding=pad_xy,
+                             focuscolor=C[accent], anchor="center", width=0)
+                st.map(f"{prefix}{accent}.T.TButton",
+                       background=[("pressed", C["line"]), ("active", C["line"])],
+                       foreground=[("disabled", C["line"])])
         st.configure("T.TCombobox", fieldbackground=C["panel"], background=C["panel"],
                      foreground=C["fg"], arrowcolor=C["dim"], bordercolor=C["line"],
                      selectbackground=C["panel"], selectforeground=C["fg"])
@@ -1391,15 +1394,16 @@ class App:
                      highlightcolor=C["green"], selectbackground=C["line"])
         return self.wire_entry(e)
 
-    def button(self, parent, text, cmd, accent="green"):
+    def button(self, parent, text, cmd, accent="green", big=False):
         """A real button, not a Label that happens to react to clicks.
 
         ttk.Button is what gives Tab focus, Space and Return activation, and
         the control an accessibility tool needs to announce as a button. The
         Label version looked identical and was reachable by mouse only.
         """
+        prefix = "big" if big else ""
         return ttk.Button(parent, text=text, command=cmd, takefocus=True,
-                          cursor="hand2", style=f"{accent}.T.TButton")
+                          cursor="hand2", style=f"{prefix}{accent}.T.TButton")
 
     def label(self, parent, text):
         return tk.Label(parent, text=text, bg=C["bg"], fg=C["dim"], font=self.f)
@@ -1478,6 +1482,14 @@ class App:
         tk.Label(head, text=APP, bg=C["bg"], fg=C["green"], font=self.fh).pack(side="left")
         tk.Label(head, text=f"  v{VERSION}  ::  {self.t('tagline')}",
                  bg=C["bg"], fg=C["dim"], font=self.f).pack(side="left", pady=(5, 0))
+        # Settings sits top right, out of the way of the things you touch on
+        # every run. The hint beside it is the one thing worth seeing without
+        # opening the dialog: what is currently switched on.
+        self.button(head, self.t("settings"), self.open_settings,
+                    "cyan").pack(side="right", pady=(2, 0))
+        self.settings_hint = tk.Label(head, bg=C["bg"], fg=C["dim"], font=self.f)
+        self.settings_hint.pack(side="right", padx=(0, 12), pady=(5, 0))
+        self.refresh_hint()
 
         tk.Frame(self.root, bg=C["line"], height=1).pack(fill="x", pady=(8, 12), **pad)
 
@@ -1495,31 +1507,23 @@ class App:
         self.refresh_btn = self.button(row, self.t("refresh"), self.do_refresh, "cyan")
         self.refresh_btn.pack(side="left", padx=(6, 0))
 
-
-        opt = tk.Frame(self.root, bg=C["bg"])
-        opt.pack(fill="x", pady=(10, 0), **pad)
-        # The download button is repeated here because the one in the status
-        # bar sits below the list, which is a long way from where you finish
-        # choosing rows on a tall window.
-        self.dl_btn_top = self.button(opt, self.t("download"), self.do_download,
-                                      "amber")
-        self.dl_btn_top.pack(side="left", padx=(0, 16))
-        self.button(opt, self.t("settings"), self.open_settings,
-                    "cyan").pack(side="left")
-        # C["line"] is a border colour; as text on the background it measured
-        # 1.44:1, which is not read so much as guessed at.
-        self.settings_hint = tk.Label(opt, bg=C["bg"], fg=C["dim"], font=self.f)
-        self.settings_hint.pack(side="left", padx=(12, 0))
-        self.refresh_hint()
-
         out = tk.Frame(self.root, bg=C["bg"])
-        out.pack(fill="x", pady=(8, 0), **pad)
+        out.pack(fill="x", pady=(12, 0), **pad)
         self.label(out, self.t("save_to")).pack(side="left")
-        self.outdir = self.entry(out, textvariable=self.outdir_var)
-        self.outdir.pack(side="left", fill="x", expand=True, padx=(6, 6), ipady=3)
+        # Download goes on first so it keeps the right-hand end whatever the
+        # path is doing, and the path box no longer swallows the whole row -
+        # a download folder is a short piece of text that was given the width
+        # of a URL.
+        self.outdir = self.entry(out, width=46, textvariable=self.outdir_var)
+        self.outdir.pack(side="left", padx=(6, 6), ipady=3)
         self.button(out, self.t("browse"), self.pick_dir, "cyan").pack(side="left")
         self.button(out, self.t("open"), self.open_dir,
                     "cyan").pack(side="left", padx=(6, 0))
+        # Right beside the folder it will download into, and the biggest thing
+        # on the row - it is what every visit to this window is for.
+        self.dl_btn_top = self.button(out, self.t("download"), self.do_download,
+                                      "amber", big=True)
+        self.dl_btn_top.pack(side="left", padx=(18, 0))
 
         # --- results: list on the left, preview on the right ---------------
         wrap = tk.Frame(self.root, bg=C["bg"])
@@ -1626,7 +1630,8 @@ class App:
         self.prog = ttk.Progressbar(bar, style="T.Horizontal.TProgressbar",
                                     length=200, maximum=100)
         self.prog.pack(side="left", padx=(10, 10))
-        self.dl_btn = self.button(bar, self.t("download"), self.do_download, "amber")
+        self.dl_btn = self.button(bar, self.t("download"), self.do_download,
+                                  "amber", big=True)
         self.dl_btn.pack(side="left")
         self.stop_btn = self.button(bar, self.t("stop"), self.stop_all, "red")
 
@@ -2721,6 +2726,20 @@ def ui_selftest():
                 assert bottom <= dlg[0].winfo_rooty() + dlg[0].winfo_height(),                     f"{b.cget('text')} sits below the dialog"
         dlg[0].grab_release()
         dlg[0].destroy()
+
+        # download is the primary action and reads as one: bigger than the
+        # buttons around it, and present both above the list and below it
+        for dl in (app.dl_btn_top, app.dl_btn):
+            assert dl.winfo_reqwidth() > app.scan_btn.winfo_reqwidth(), "download shrank"
+            assert dl.winfo_reqheight() > app.scan_btn.winfo_reqheight()
+            assert dl.cget("style").startswith("big"), dl.cget("style")
+
+        # the path box is a folder, not a URL - it used to expand like one and
+        # swallow the whole row. expand is the property that decides that, and
+        # reqwidth is not: the URL box gets its size from expand, not from a
+        # width it asked for.
+        assert not int(app.outdir.pack_info()["expand"]),             "the download path is taking the whole row again"
+        assert int(app.url.pack_info()["expand"]), "the URL box should still grow"
 
         # a heading defaults to centre while its column may be left or right
         # aligned, which had every title floating over the wrong place

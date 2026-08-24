@@ -66,9 +66,12 @@ ATTEMPTS = 3
 PARALLEL = 4
 MAX_PARALLEL = 8
 
-# Status text is clipped to this many characters so the progress bar and the
-# download button beside it never jump around. The log keeps the full line.
-STATUS_CHARS = 54
+# Width of the status label, in characters of the mono font. Fixed so the
+# progress bar and the download button beside it never jump around; the log
+# keeps the full line either way. Clipping is measured in pixels rather than
+# characters - see App.fit_status - because the Greek wording of a message runs
+# longer than the English, and a character count clips one and not the other.
+STATUS_CHARS = 68
 
 PREVIEW_W = 240            # preview pane width in pixels
 IMAGE_HEADER_BYTES = 65536  # enough for any JPEG/PNG/WebP size header
@@ -147,15 +150,6 @@ def _data_dir() -> str:
 
 
 DATA_DIR = _data_dir()
-BIN_DIR = os.path.join(DATA_DIR, "bin")
-
-# Official static Windows build, fetched once when ffmpeg is nowhere to be
-# found: on first launch in the background, or on demand from the "get ffmpeg"
-# button. Both paths say so in the log; only the button asks first, because by
-# the time you are clicking it you already know what you want.
-FFMPEG_ZIP = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
-
-
 SETTINGS_FILE = os.path.join(DATA_DIR, "settings.json")
 DEFAULT_OUTDIR = os.path.join(os.path.expanduser("~"), "Downloads", APP)
 
@@ -189,47 +183,35 @@ def save_settings(data: dict) -> None:
 
 
 def ffmpeg_path() -> str | None:
-    """Baked into the exe first, then beside the app, then downloaded, then PATH."""
+    """Where ffmpeg is. Beside the app first, then the wheel, then PATH.
+
+    It used to be fetched from gyan.dev at runtime, which meant this app
+    downloading and running a 100 MB executable it had no way to verify. The
+    imageio-ffmpeg wheel is that same gyan.dev build, delivered through PyPI
+    where pip checks the hash on the way in - so the verification is somebody
+    else's already-solved problem and there is no pinned digest to go stale.
+
+    A copy in ./bin still wins, so dropping a newer or differently-built ffmpeg
+    next to the app overrides the packaged one.
+    """
     name = "ffmpeg.exe" if os.name == "nt" else "ffmpeg"
     roots = []
     bundled = getattr(sys, "_MEIPASS", None)  # PyInstaller unpack dir
     if bundled:
         roots.append(os.path.join(bundled, "bin"))
-    roots += [os.path.join(APP_DIR, "bin"), BIN_DIR]
+    roots.append(os.path.join(APP_DIR, "bin"))
     for root in roots:
         candidate = os.path.join(root, name)
         if os.path.exists(candidate):
             return candidate
+    try:
+        import imageio_ffmpeg
+        found = imageio_ffmpeg.get_ffmpeg_exe()
+        if found and os.path.exists(found):
+            return found
+    except Exception:
+        pass  # not installed, or it cannot find its own binary
     return shutil.which("ffmpeg")
-
-
-def fetch_ffmpeg(progress) -> str:
-    """Download the static ffmpeg build into ./bin. Returns the ffmpeg path."""
-    import io
-    import zipfile
-
-    os.makedirs(BIN_DIR, exist_ok=True)
-    buf = io.BytesIO()
-    with requests.get(FFMPEG_ZIP, stream=True, timeout=60,
-                      headers={"User-Agent": UA}) as r:
-        r.raise_for_status()
-        total = int(r.headers.get("content-length") or 0)
-        for chunk in r.iter_content(262144):
-            buf.write(chunk)
-            progress(buf.tell(), total)
-
-    wanted = ("ffmpeg.exe", "ffprobe.exe") if os.name == "nt" else ("ffmpeg", "ffprobe")
-    with zipfile.ZipFile(buf) as z:
-        for member in z.namelist():
-            base = os.path.basename(member)
-            if base in wanted:
-                with z.open(member) as src, open(os.path.join(BIN_DIR, base), "wb") as dst:
-                    shutil.copyfileobj(src, dst)
-    path = ffmpeg_path()
-    if not path:
-        raise RuntimeError("archive did not contain ffmpeg")
-    os.chmod(path, 0o755)
-    return path
 
 
 def update_ytdlp(log) -> None:
@@ -866,6 +848,9 @@ def scan_media(url: str, proxy: str | None, log,
         "quiet": True, "no_warnings": True, "skip_download": True,
         "cachedir": False, "noprogress": True, "extract_flat": "in_playlist",
         "http_headers": {"User-Agent": UA}, "logger": _Hush(), "no_color": True,
+        # without this a site that accepts the connection and then says nothing
+        # holds the scan open for as long as it likes
+        "socket_timeout": SOCKET_TIMEOUT,
     }
     if proxy:
         opts["proxy"] = proxy
@@ -1188,6 +1173,11 @@ class App:
         self.t = Tr(self.prefs.get("language", "en"))
         self.marked: set[str] = set()
         self.cancelled: set[int] = set()   # item indices pulled mid-download
+        self.scanning = False
+        # Bumped to abandon a scan. The worker cannot be killed - it is parked
+        # in a socket read - so instead its result is dropped when it finally
+        # lands, and the window is handed back immediately.
+        self.scan_token = 0
 
         root.title(f"{APP} {VERSION}")
         root.configure(bg=C["bg"])
@@ -1224,11 +1214,11 @@ class App:
         self.tick = root.after(80, self.pump)
         threading.Thread(target=update_ytdlp, args=(self.log,), daemon=True).start()
         if not ffmpeg_path():
-            # Fetch it once, quietly, in the background. Every resolution above
-            # 360p and the whole mp3 path depend on it, so waiting for the user
-            # to discover a button just means broken-looking downloads.
-            threading.Thread(target=self._ffmpeg_worker, args=(True,),
-                             daemon=True).start()
+            # Nothing to click and nothing to download: ffmpeg rides in with the
+            # dependencies. Missing it means the pip install did not finish, and
+            # the log is where that gets said.
+            self.log("ffmpeg not found - 1080p+ merging and mp3 are unavailable. "
+                     "Run: pip install -r requirements.txt", "warn")
 
     def close(self):
         self.remember()
@@ -1456,9 +1446,6 @@ class App:
         self.button(out, self.t("browse"), self.pick_dir, "cyan").pack(side="left")
         self.button(out, self.t("open"), self.open_dir,
                     "cyan").pack(side="left", padx=(6, 0))
-        self.ff_btn = self.button(out, self.t("get_ffmpeg"), self.get_ffmpeg, "amber")
-        if not ffmpeg_path():
-            self.ff_btn.pack(side="left", padx=(6, 0))
 
         # --- results: list on the left, preview on the right ---------------
         wrap = tk.Frame(self.root, bg=C["bg"])
@@ -1536,6 +1523,9 @@ class App:
 
         self.status = tk.Label(bar, text=self.t("ready"), bg=C["bg"], fg=C["dim"],
                                font=self.f, anchor="w", width=STATUS_CHARS)
+        # what fit_status is allowed to fill, in pixels, from the same font the
+        # label draws with
+        self.status_px = self.f.measure("0" * STATUS_CHARS)
         self.status.pack(side="left")
         self.prog = ttk.Progressbar(bar, style="T.Horizontal.TProgressbar",
                                     length=200, maximum=100)
@@ -1584,6 +1574,18 @@ class App:
 
     def stop_all(self):
         if not self.busy:
+            return
+        if self.scanning:
+            # The request itself keeps running until the socket gives up - that
+            # is the one thing a thread cannot be talked out of. What stopping
+            # can do is give the window back now and ignore the answer.
+            self.scanning = False
+            self.scan_token += 1
+            self.log("stop :: scan abandoned, the request winds down on its own",
+                     "warn")
+            self.say(self.t("stopping"), C["amber"])
+            self.q.put(("busy", False, None))
+            self.q.put(("hide_stop", None, None))
             return
         self.cancelled.update(range(len(self.items)))
         for row in self.tree.get_children():
@@ -1879,41 +1881,22 @@ class App:
         else:
             webbrowser.open("file://" + d)
 
+    def fit_status(self, text: str) -> str:
+        """Trim a status line to what the label can actually show.
+
+        Measured against the font rather than counted in characters: the same
+        message in Greek is a good deal longer than in English, so a character
+        limit that suits one clips the other mid-word. The log keeps the whole
+        line regardless.
+        """
+        if self.f.measure(text) <= self.status_px:
+            return text
+        while text and self.f.measure(text + "...") > self.status_px:
+            text = text[:-1]
+        return text.rstrip() + "..."
+
     def say(self, text, colour=None):
         self.q.put(("status", text, colour or C["dim"]))
-
-    def get_ffmpeg(self):
-        if self.busy:
-            return
-        if not messagebox.askyesno(
-                "get ffmpeg",
-                f"Download the official static ffmpeg build (~40 MB) from\n\n"
-                f"{urlparse(FFMPEG_ZIP).netloc}\n\ninto:\n{BIN_DIR}\n\n"
-                "It is needed for 1080p and above, since those ship video and "
-                "audio as separate streams. Proceed?"):
-            return
-        self.set_busy(True)
-        threading.Thread(target=self._ffmpeg_worker, daemon=True).start()
-
-    def _ffmpeg_worker(self, auto=False):
-        try:
-            if auto:
-                self.log("ffmpeg missing - fetching it in the background", "warn")
-            self.say(self.t("ffmpeg_dl"), C["fg"])
-            path = fetch_ffmpeg(
-                lambda done, total: None if auto else self.q.put(
-                    ("prog", (done / total * 100) if total else 0, None)))
-            self.q.put(("prog", 100, None))
-            self.say(self.t("ffmpeg_ready"), C["green"])
-            self.log(f"ffmpeg installed at {path}", "ok")
-            self.q.put(("hide_ff", None, None))
-        except Exception as exc:
-            self.say(self.t("ffmpeg_failed", err=exc), C["red"])
-            self.log(f"ffmpeg download failed :: {exc}. Use the 'get ffmpeg' "
-                     f"button to retry, or install it on your PATH.", "error")
-        finally:
-            if not auto:
-                self.q.put(("busy", False, None))
 
     def do_scan(self):
         if self.busy:
@@ -1927,18 +1910,26 @@ class App:
             self.url.delete(0, "end")
             self.url.insert(0, url)
         self.set_busy(True)
+        self.scanning = True
+        self.scan_token += 1
         self.tree.delete(*self.tree.get_children())
         self.items = []
         self.marked.clear()
-        threading.Thread(target=self._scan_worker, args=(url,), daemon=True).start()
+        self.stop_btn.pack(side="left", padx=(6, 0))
+        threading.Thread(target=self._scan_worker, args=(url, self.scan_token),
+                         daemon=True).start()
 
-    def _scan_worker(self, url):
+    def _scan_worker(self, url, token):
         self.log(f"scan {url}")
         try:
             items = scan(url, self.proxy_var.get().strip() or None, self.say,
                          self.cookies(),
                          self.t("no_video", site=urlparse(url).netloc),
                          self.t("try_cookies"))
+            if token != self.scan_token:
+                self.log(f"scan finished after being stopped, result dropped "
+                         f":: {url}", "warn")
+                return
             self.q.put(("items", items, None))
             if items:
                 self.log(f"found {len(items)} items", "ok")
@@ -1947,11 +1938,19 @@ class App:
                 self.log("nothing downloadable found at this link", "warn")
                 self.say(self.t("nothing_found"), C["amber"])
         except Exception as exc:
+            if token != self.scan_token:
+                self.log(f"stopped scan failed on its way out :: {exc}", "warn")
+                return
             self.say(self.t("scan_failed", err=exc), C["red"])
             self.log(f"scan failed :: {exc}", "error")
             self.log(traceback.format_exc().rstrip(), "error")
         finally:
-            self.q.put(("busy", False, None))
+            # A stopped scan already handed the window back; saying so again
+            # here would undo whatever the user started in the meantime.
+            if token == self.scan_token:
+                self.scanning = False
+                self.q.put(("busy", False, None))
+                self.q.put(("hide_stop", None, None))
 
     def do_download(self):
         if self.busy:
@@ -2100,7 +2099,7 @@ class App:
         self.busy = busy
         # A disabled ttk.Button also drops out of the Tab order, which the old
         # greyed-out Label did not - the state is now real, not just painted.
-        for b in (self.scan_btn, self.dl_btn, self.ff_btn, self.refresh_btn):
+        for b in (self.scan_btn, self.dl_btn, self.refresh_btn):
             b.state(["disabled"] if busy else ["!disabled"])
         if busy:
             self.prog.config(value=0)
@@ -2110,15 +2109,11 @@ class App:
             while True:
                 kind, a, b = self.q.get_nowait()
                 if kind == "status":
-                    if len(a) > STATUS_CHARS:
-                        a = a[:STATUS_CHARS - 3] + "..."
-                    self.status.config(text=a, fg=b)
+                    self.status.config(text=self.fit_status(a), fg=b)
                 elif kind == "prog":
                     self.prog.config(value=a)
                 elif kind == "busy":
                     self.set_busy(a)
-                elif kind == "hide_ff":
-                    self.ff_btn.pack_forget()
                 elif kind == "hide_stop":
                     self.stop_btn.pack_forget()
                 elif kind == "log":
@@ -2335,6 +2330,10 @@ def selftest():
     assert host_slot("https://a.com/1.jpg") is host_slot("https://a.com/2.jpg")
     assert host_slot("https://a.com/1.jpg") is not host_slot("https://b.com/1.jpg")
 
+    # ffmpeg arrives as a wheel now; the downloader and its button are gone
+    assert "fetch_ffmpeg" not in globals(), "the runtime downloader came back"
+    assert ffmpeg_path(), "no ffmpeg anywhere - is imageio-ffmpeg installed?"
+
     # a .part nobody will finish is litter; one that can still resume is not
     tmpdir = tempfile.mkdtemp()
     dead = Item("https://h/x.bin", "x.bin", "file")
@@ -2396,7 +2395,7 @@ def ui_selftest():
 
         # Buttons must be controls, not Labels wearing a click handler: only a
         # real one takes Tab focus and announces itself to a screen reader.
-        gated = [app.scan_btn, app.dl_btn, app.ff_btn, app.refresh_btn]
+        gated = [app.scan_btn, app.dl_btn, app.refresh_btn]
         for b in gated + [app.stop_btn]:
             assert isinstance(b, ttk.Button), type(b)
             assert str(b.cget("takefocus")) in ("1", "True"), "not tab-reachable"
@@ -2471,6 +2470,30 @@ def ui_selftest():
             assert box.cget("style") == "T.TCombobox"
         dlg[0].grab_release()
         dlg[0].destroy()
+
+        # a status line is clipped against the font, not counted in characters:
+        # the Greek wording of a message runs longer than the English, and 54
+        # characters used to cut the Greek version of lines the English fit
+        for code in LANGUAGES:
+            app.t.set(code)
+            for key in ("ready", "nothing_marked", "try_cookies"):
+                line = app.t(key)
+                assert app.fit_status(line) == line, f"{code}/{key} clipped: {line}"
+        app.t.set("en")
+        long_line = "x" * 400
+        assert app.f.measure(app.fit_status(long_line)) <= app.status_px
+        assert app.fit_status(long_line).endswith("...")
+
+        # a scan can be walked away from: the request cannot be killed, but the
+        # window comes back and the late answer is thrown away
+        assert not app.scanning
+        app.scanning, app.busy = True, True
+        stale = app.scan_token
+        app.stop_all()
+        assert not app.scanning and app.scan_token != stale, "stop did not abandon"
+        while not app.q.empty():
+            app.pump()
+        assert not app.busy, "stop did not hand the window back"
 
         # every language change used to leave another pump loop running
         pending = len(root.tk.call("after", "info"))

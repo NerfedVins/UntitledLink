@@ -61,10 +61,15 @@ is a miserable way to discover that.
 
 ## ffmpeg
 
-It is there by default. `build.bat` bakes it into the exe, and a plain
-`python convertex.py` fetches it once in the background on first launch, so the
-first thing you do already works. The `get ffmpeg` button stays as a manual retry
-and disappears once ffmpeg is found - bundled, in `bin\`, or on your PATH.
+It arrives with the dependencies. `requirements.txt` asks for `imageio-ffmpeg`,
+which is the same gyan.dev static build the app used to download for itself,
+packaged as a wheel - so **pip checks its hash on the way in** and there is
+nothing here to verify by hand or keep pinned. There is no button and no
+first-run download.
+
+A copy in `bin\` next to the app still wins, so dropping a newer or
+differently-built ffmpeg there overrides the packaged one. After that comes the
+wheel, then whatever is on your PATH.
 
 It matters because above roughly 360p YouTube ships video and audio as **separate
 streams** that have to be merged, and mp3 needs re-encoding. Rows that cannot run
@@ -305,3 +310,12 @@ Double-click a row downloads it.
 
 Downloading from sites that forbid it in their terms is on you, and the material
 is often copyrighted. yt-dlp itself is legal open source.
+
+## Stopping a scan
+
+A scan that is still waiting can be stopped with the same **stop** button the
+downloads use. The request itself cannot be killed - it is parked in a socket
+read, which is the one thing a thread cannot be talked out of - so what stopping
+does is hand the window back immediately and throw the answer away when it
+finally arrives. yt-dlp's side of a scan is bounded by the same 60s socket
+timeout the downloader uses, so nothing waits forever either way.

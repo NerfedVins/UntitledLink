@@ -73,7 +73,14 @@ MAX_PARALLEL = 8
 # longer than the English, and a character count clips one and not the other.
 STATUS_CHARS = 68
 
-PREVIEW_W = 240            # preview pane width in pixels
+# The preview pane takes a share of the window rather than a fixed slice, so
+# maximising the window grows the picture instead of handing every extra pixel
+# to a NAME column that had nothing to do with it. Clamped at both ends: below
+# PREVIEW_W the pane stops being useful, above PREVIEW_MAX it starves the list.
+PREVIEW_W = 240            # narrowest the preview pane goes, in pixels
+PREVIEW_MAX = 620          # widest, however big the window gets
+PREVIEW_SHARE = 0.27       # of the results area, when that lands between them
+CHECKBOX = 16              # mark-column checkbox, in pixels
 IMAGE_HEADER_BYTES = 65536  # enough for any JPEG/PNG/WebP size header
 PREVIEW_MAX_BYTES = 8 << 20
 MAX_THUMB_CACHE = 60       # decoded previews kept before the cache is dropped
@@ -372,6 +379,41 @@ class Item:
         self.thumb = thumb      # url to show in the preview pane
         self.info = info        # one-line technical summary for the list
         self.details = details  # multi-line block for the preview pane
+
+
+def checkbox_images(size: int = CHECKBOX) -> dict:
+    """The three states of the mark column, drawn rather than typed.
+
+    ☐ and ☑ are missing from plenty of monospaced fonts and land as tofu boxes,
+    and "[x]" never looked like something you could click. These are drawn four
+    times up and shrunk back down, which is what gets the edges smooth.
+
+    Needs a Tk root to already exist - PhotoImage cannot be built before one.
+    """
+    from PIL import Image, ImageDraw, ImageTk
+
+    scale = 4
+    big = size * scale
+    pad = scale
+    out = {}
+    for name, edge, fill in (("off", C["dim"], None),
+                             ("on", C["green"], C["green"]),
+                             ("cut", C["red"], None)):
+        img = Image.new("RGBA", (big, big), (0, 0, 0, 0))
+        d = ImageDraw.Draw(img)
+        d.rounded_rectangle([pad, pad, big - pad - 1, big - pad - 1],
+                            radius=scale * 3, outline=edge, width=scale,
+                            fill=fill)
+        if name == "on":      # a tick, in the panel colour so it reads as cut out
+            d.line([(big * .30, big * .52), (big * .44, big * .68),
+                    (big * .72, big * .32)],
+                   fill=C["bg"], width=scale * 2, joint="curve")
+        elif name == "cut":   # a dash: pulled from the queue, not unticked
+            d.line([(big * .32, big * .5), (big * .68, big * .5)],
+                   fill=C["red"], width=scale * 2)
+        out[name] = ImageTk.PhotoImage(
+            img.resize((size, size), Image.LANCZOS))
+    return out
 
 
 def clock(seconds) -> str:
@@ -1264,7 +1306,7 @@ class App:
         st = ttk.Style()
         st.theme_use("clam")
         st.configure("T.Treeview", background=C["panel"], fieldbackground=C["panel"],
-                     foreground=C["fg"], borderwidth=0, rowheight=22,
+                     foreground=C["fg"], borderwidth=0, rowheight=26,
                      font=(self.mono, 10))
         st.configure("T.Treeview.Heading", background=C["bg"], foreground=C["dim"],
                      borderwidth=0, font=(self.mono, 9, "bold"), padding=(6, 4))
@@ -1453,14 +1495,20 @@ class App:
 
         left = tk.Frame(wrap, bg=C["bg"])
         left.pack(side="left", fill="both", expand=True)
+        # The checkbox lives in the tree column (#0) because that is the only
+        # one Treeview will draw an image in, so "tree headings" rather than
+        # the "headings" this used when the mark was the text "[x]".
+        self.boxes = checkbox_images()
         self.tree = ttk.Treeview(left,
-                                 columns=("mark", "kind", "size", "info", "name"),
-                                 show="headings", style="T.Treeview",
+                                 columns=("kind", "size", "info", "name"),
+                                 show="tree headings", style="T.Treeview",
                                  selectmode="extended")
-        for col, txt, w, anchor in (("mark", "", 34, "center"),
-                                    ("kind", self.t("col_type"), 66, "w"),
+        self.tree.heading("#0", text="")
+        self.tree.column("#0", width=38, minwidth=38, stretch=False,
+                         anchor="center")
+        for col, txt, w, anchor in (("kind", self.t("col_type"), 66, "w"),
                                     ("size", self.t("col_size"), 66, "e"),
-                                    ("info", self.t("col_info"), 220, "w"),
+                                    ("info", self.t("col_info"), 260, "w"),
                                     ("name", self.t("col_name"), 340, "w")):
             self.tree.heading(col, text=txt)
             self.tree.column(col, width=w, anchor=anchor, stretch=(col == "name"))
@@ -1481,19 +1529,22 @@ class App:
         self.tree.bind("<Return>", self.on_row_key)
         self.root.bind_all("<Control-KeyPress>", self.on_ctrl)
 
-        right = tk.Frame(wrap, bg=C["panel"], width=PREVIEW_W + 20)
-        right.pack(side="right", fill="y", padx=(12, 0))
-        right.pack_propagate(False)
-        self.thumb_box = tk.Label(right, bg=C["panel"], fg=C["dim"], font=self.f,
+        self.preview_w = PREVIEW_W
+        self.right = tk.Frame(wrap, bg=C["panel"], width=PREVIEW_W + 20)
+        self.right.pack(side="right", fill="y", padx=(12, 0))
+        self.right.pack_propagate(False)
+        self.thumb_box = tk.Label(self.right, bg=C["panel"], fg=C["dim"], font=self.f,
                                   text="\n\n" + self.t("preview_hint"), justify="center")
         self.thumb_box.pack(pady=(10, 6), padx=10)
-        self.meta_box = tk.Label(right, bg=C["panel"], fg=C["dim"], font=self.f,
+        self.meta_box = tk.Label(self.right, bg=C["panel"], fg=C["dim"], font=self.f,
                                  justify="left", anchor="nw",
                                  wraplength=PREVIEW_W, text="")
         self.meta_box.pack(fill="x", padx=10)
         self.thumb_ref = None   # PhotoImage must outlive this call
+        self.thumb_img = None   # the full-size PIL copy, to redraw on a resize
         self.thumb_cache: dict[str, object] = {}
         self.preview_token = 0  # ignore thumbnails that arrive after a new pick
+        wrap.bind("<Configure>", self.on_wrap_resize)
 
         # --- log panel, hidden until asked for or until something breaks ---
         self.log_frame = tk.Frame(self.root, bg=C["bg"])
@@ -1538,7 +1589,9 @@ class App:
 
     def on_row_click(self, event):
         """A plain click marks the row - that is how you queue several at once."""
-        if self.tree.identify("region", event.x, event.y) != "cell":
+        # "tree" is the checkbox column, "cell" is everything else; a click on
+        # the heading or the empty space below the rows is neither.
+        if self.tree.identify("region", event.x, event.y) not in ("tree", "cell"):
             return None
         row = self.tree.identify_row(event.y)
         if not row:
@@ -1568,7 +1621,7 @@ class App:
         if index in self.cancelled:
             return
         self.cancelled.add(index)
-        self.tree.set(row, "mark", "[-]")
+        self.tree.item(row, image=self.boxes["cut"])
         self.log(f"pulled from queue :: {self.items[index].name}", "warn")
         self.say(self.t("pulled", n=len(self.cancelled)), C["amber"])
 
@@ -1589,7 +1642,7 @@ class App:
             return
         self.cancelled.update(range(len(self.items)))
         for row in self.tree.get_children():
-            self.tree.set(row, "mark", "[-]")
+            self.tree.item(row, image=self.boxes["cut"])
         self.log("stop :: cancelling everything still queued", "warn")
         self.say(self.t("stopping"), C["amber"])
 
@@ -1601,7 +1654,7 @@ class App:
         self.tree.delete(*self.tree.get_children())
         self.items = []
         self.marked.clear()
-        self.set_thumb(None, self.t("preview_hint"))
+        self.clear_thumb(self.t("preview_hint"))
         self.meta_box.config(text="")
         self.url.focus_set()
         self.say(self.t("ready"))
@@ -1619,7 +1672,7 @@ class App:
             self.marked.add(row)
         else:
             self.marked.discard(row)
-        self.tree.set(row, "mark", "[x]" if on else "[ ]")
+        self.tree.item(row, image=self.boxes["on" if on else "off"])
         tags = [t for t in self.tree.item(row, "tags") if t != "marked"]
         self.tree.item(row, tags=tags + (["marked"] if on else []))
         self.count_marks()
@@ -1649,13 +1702,17 @@ class App:
         block += ["", it.url[:200]]
         self.meta_box.config(text="\n".join(block))
         if not it.thumb:
-            self.set_thumb(None, self.t("no_preview"))
+            self.clear_thumb(self.t("no_preview"))
             return
         cached = self.thumb_cache.get(it.thumb)
         if cached is not None:
-            self.set_thumb(cached or None, self.t("preview_failed"))
+            # False is remembered failure; anything else is a PIL image
+            if cached:
+                self.show_thumb(cached)
+            else:
+                self.clear_thumb(self.t("preview_failed"))
             return
-        self.set_thumb(None, self.t("loading"))
+        self.clear_thumb(self.t("loading"))
         threading.Thread(
             target=self._thumb_worker,
             args=(it.thumb, it.url if it.kind == "image" else "", token,
@@ -1673,7 +1730,9 @@ class App:
             data = r.raw.read(PREVIEW_MAX_BYTES + 1, decode_content=True)
             img = Image.open(io.BytesIO(data))
             dims = f"{img.width}x{img.height}"
-            img.thumbnail((PREVIEW_W, PREVIEW_W), Image.LANCZOS)
+            # sized for the widest the pane can get, so growing the window
+            # redraws from real pixels rather than upscaling a small copy
+            img.thumbnail((PREVIEW_MAX, PREVIEW_MAX), Image.LANCZOS)
             # The preview may be a thumbnail while the download is the upgraded
             # original. Reporting the preview's size would be a lie about what
             # you are about to get, so measure the real file's header instead.
@@ -1695,12 +1754,39 @@ class App:
                 if i < len(rows):
                     self.tree.set(rows[i], "info", dims)
 
-    def set_thumb(self, photo, text=""):
-        self.thumb_ref = photo
-        if photo is None:
-            self.thumb_box.config(image="", text=f"\n\n{text}", height=12, width=30)
-        else:
-            self.thumb_box.config(image=photo, text="", height=0, width=0)
+    def clear_thumb(self, text=""):
+        """No picture: a line of explanation where the picture would be."""
+        self.thumb_ref = self.thumb_img = None
+        self.thumb_box.config(image="", text=f"\n\n{text}", height=12, width=30)
+
+    def show_thumb(self, img):
+        """Draw a preview at whatever width the pane happens to have now.
+
+        The full-size copy is kept so a resize can redraw from it - scaling the
+        already-shrunk one back up would just look soft.
+        """
+        from PIL import Image, ImageTk
+        self.thumb_img = img
+        shown = img.copy()
+        shown.thumbnail((self.preview_w, self.preview_w), Image.LANCZOS)
+        self.thumb_ref = ImageTk.PhotoImage(shown)
+        self.thumb_box.config(image=self.thumb_ref, text="", height=0, width=0)
+
+    def on_wrap_resize(self, event):
+        """Hand the preview a share of the window instead of a fixed 240px.
+
+        Maximised on a wide screen the list had far more width than its columns
+        could use while the preview stayed postage-stamp sized. The list still
+        takes whatever is left over, and shrinking the window walks it back.
+        """
+        want = max(PREVIEW_W, min(PREVIEW_MAX, int(event.width * PREVIEW_SHARE)))
+        if want == self.preview_w:
+            return          # Configure fires per pixel of a drag; most are noise
+        self.preview_w = want
+        self.right.config(width=want + 20)
+        self.meta_box.config(wraplength=want)
+        if self.thumb_img is not None:
+            self.show_thumb(self.thumb_img)
 
     def toggle_log(self):
         if self.log_frame.winfo_ismapped():
@@ -2123,19 +2209,17 @@ class App:
                     if img is None:
                         self.thumb_cache[url] = False
                         if token == self.preview_token:
-                            self.set_thumb(None, self.t("preview_failed"))
+                            self.clear_thumb(self.t("preview_failed"))
                         self.log(f"preview failed :: {b}", "warn")
                     else:
-                        from PIL import ImageTk
-                        photo = ImageTk.PhotoImage(img)
-                        # ponytail: a decoded bitmap each, and a playlist can be
-                        # 200 rows. Dropping the lot is fine - worst case a
+                        # ponytail: an image each, and a playlist can be 200
+                        # rows. Dropping the lot is fine - worst case a
                         # revisited row re-fetches its preview.
                         if len(self.thumb_cache) > MAX_THUMB_CACHE:
                             self.thumb_cache.clear()
-                        self.thumb_cache[url] = photo
+                        self.thumb_cache[url] = img
                         if token == self.preview_token:
-                            self.set_thumb(photo)
+                            self.show_thumb(img)
                         self.fill_dimensions(url, b)
                 elif kind == "items":
                     self.items = a
@@ -2144,7 +2228,8 @@ class App:
                         # back to the generic media tag for colouring those rows
                         tag = it.kind if it.kind in TAG_COLOURS else "media"
                         self.tree.insert("", "end", tags=(tag,),
-                                         values=("[ ]", it.kind, human(it.size),
+                                         image=self.boxes["off"],
+                                         values=(it.kind, human(it.size),
                                                  it.info, it.name))
         except queue.Empty:
             pass
@@ -2470,6 +2555,37 @@ def ui_selftest():
             assert box.cget("style") == "T.TCombobox"
         dlg[0].grab_release()
         dlg[0].destroy()
+
+        # the mark column is three drawn images now, not the text "[x]"
+        assert set(app.boxes) == {"off", "on", "cut"}, app.boxes
+        assert "mark" not in app.tree.cget("columns"), "text mark column returned"
+        assert all(b.width() == CHECKBOX for b in app.boxes.values())
+        off = app.tree.item(rows[0], "image")
+        assert off, "row inserted without a checkbox"
+        app.toggle_mark(rows[0])
+        assert app.tree.item(rows[0], "image") != off, "ticking changed nothing"
+        app.toggle_mark(rows[0])
+        assert app.tree.item(rows[0], "image") == off, "unticking changed nothing"
+
+        # the preview takes a share of the window rather than a fixed 240px,
+        # clamped so it neither vanishes nor eats the list
+        from PIL import Image as _Im
+        wide = _Im.new("RGB", (1200, 800))
+        seen = []
+        root.deiconify()          # a withdrawn window reports no real geometry
+        for w, h in ((940, 540), (1920, 1080), (2560, 1440), (940, 540)):
+            root.geometry(f"{w}x{h}")
+            root.update_idletasks()
+            root.update()
+            app.show_thumb(wide)
+            seen.append(app.preview_w)
+            assert PREVIEW_W <= app.preview_w <= PREVIEW_MAX, app.preview_w
+            assert app.thumb_ref.width() <= app.preview_w
+        assert seen[1] > seen[0], f"maximising did not widen the preview: {seen}"
+        assert seen[3] == seen[0], f"shrinking did not walk it back: {seen}"
+        root.geometry("1140x700")
+        root.update_idletasks()
+        root.withdraw()
 
         # a status line is clipped against the font, not counted in characters:
         # the Greek wording of a message runs longer than the English, and 54

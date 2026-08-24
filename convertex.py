@@ -378,14 +378,15 @@ class Item:
     doc, archive, file - and quality carries how good a copy it is.
     """
 
-    __slots__ = ("url", "name", "kind", "quality", "length", "size", "via",
-                 "fmt", "thumb", "info", "details")
+    __slots__ = ("url", "name", "kind", "quality", "res", "length", "size",
+                 "via", "fmt", "thumb", "info", "details")
 
     def __init__(self, url, name, kind, size=0, via="file", fmt=None, thumb=None,
-                 info="", details="", quality="", length=""):
+                 info="", details="", quality="", length="", res=""):
         self.url, self.name, self.kind = url, name, kind
-        self.quality = quality  # "1080p", "320k", "2048x1365" - display only
-        self.length = length    # "2:41"; its own column rather than buried in info
+        self.quality = quality  # "1080p mp4", "mp3 320k" - display only
+        self.res = res          # "1080x1920"; a column, not a word inside info
+        self.length = length    # "2:41"; likewise
         self.size, self.via = size, via
         self.fmt = fmt  # explicit yt-dlp format selector; None = use the dropdown
         self.thumb = thumb      # url to show in the preview pane
@@ -731,7 +732,16 @@ def media_variants(info: dict, title: str, url: str) -> list[Item]:
     head = "\n".join(head)
 
     audio_only = [f for f in formats if f.get("vcodec") == "none" and f.get("acodec") != "none"]
-    best_audio = max(audio_only, key=lambda f: (f.get("abr") or 0, _fsize(f)), default=None)
+    # One row per distinct track rather than only the best one, the same way
+    # video gets a row per resolution. Deduped on codec and bitrate because a
+    # site will happily list the same track under several format ids.
+    per_track: dict[tuple, dict] = {}
+    for f in sorted(audio_only, key=lambda f: _fsize(f), reverse=True):
+        per_track.setdefault((codec_name(f.get("acodec")),
+                              round(f.get("abr") or 0), f.get("ext")), f)
+    tracks = sorted(per_track.values(),
+                    key=lambda f: (f.get("abr") or 0, _fsize(f)), reverse=True)
+    best_audio = tracks[0] if tracks else None
     audio_bytes = _fsize(best_audio) if best_audio else 0
 
     per_height: dict[int, tuple[dict, int]] = {}
@@ -760,7 +770,7 @@ def media_variants(info: dict, title: str, url: str) -> list[Item]:
         # rather than silently handing back a silent video.
         fmt = f["format_id"] if progressive else f"{f['format_id']}+ba/b[height<={height}]"
         mark = merge_mark(progressive, have_ffmpeg)
-        bits = [f"{width or '?'}x{height}"]
+        bits = []
         if f.get("fps"):
             bits.append(f"{round(f['fps'])}fps")
         bits.append(codec_name(f.get("vcodec")))
@@ -778,36 +788,44 @@ def media_variants(info: dict, title: str, url: str) -> list[Item]:
         detail.append(f"container  {f.get('ext') or '?'}")
         items.append(Item(url, title, "video", total, via="ytdlp", fmt=fmt,
                           quality=f"{label} {f.get('ext') or ''}{mark}".strip(),
+                          res=f"{width or '?'}x{height}",
                           length=duration, thumb=thumb,
                           info="  ".join(b for b in bits if b),
                           details=head + "\n\n" + "\n".join(detail)))
 
-    if best_audio:
-        acodec = codec_name(best_audio.get("acodec"))
+    for track in tracks:
+        acodec = codec_name(track.get("acodec"))
+        # Bitrate and container are already the quality cell, so the info line
+        # carries only what is not being said there twice.
         abits = [acodec]
-        if best_audio.get("abr"):
-            abits.append(f"{round(best_audio['abr'])}k")
-        if best_audio.get("asr"):
-            abits.append(f"{round(best_audio['asr'] / 1000)}kHz")
-        if best_audio.get("audio_channels") == 2:
+        if track.get("asr"):
+            abits.append(f"{round(track['asr'] / 1000)}kHz")
+        if track.get("audio_channels") == 2:
             abits.append("stereo")
+        elif track.get("audio_channels"):
+            abits.append(f"{track['audio_channels']}ch")
+        aquality = track.get("ext") or "audio"
+        if track.get("abr"):
+            aquality += f" {round(track['abr'])}k"
         adetail = [f"audio  {acodec}  source track, not re-encoded",
-                   f"container  {best_audio.get('ext') or '?'}"]
-        aquality = best_audio.get("ext") or "audio"
-        if best_audio.get("abr"):
-            aquality += f" {round(best_audio['abr'])}k"
-        items.append(Item(url, title, "audio",
-                          audio_bytes, via="ytdlp", fmt=best_audio["format_id"],
-                          quality=aquality, length=duration,
-                          thumb=thumb, info="  ".join(b for b in abits if b),
+                   f"container  {track.get('ext') or '?'}"]
+        if track.get("abr"):
+            adetail.insert(1, f"bitrate  {round(track['abr'])}k")
+        items.append(Item(url, title, "audio", _fsize(track), via="ytdlp",
+                          fmt=track["format_id"], quality=aquality,
+                          length=duration, thumb=thumb,
+                          info="  ".join(b for b in abits if b),
                           details=head + "\n\n" + "\n".join(adetail)))
-        # Re-encoded to mp3 at 320k. Size is the source track's - the mp3 lands
-        # near it, and guessing precisely would mean decoding first.
+
+    if best_audio:
+        # Last, and after every source track: an mp3 is not a better copy of
+        # any of them, it is one of them decoded and encoded again. It is here
+        # because things that will not play an opus file still exist.
         star = merge_mark(False, have_ffmpeg)
         items.append(Item(url, title, "audio",
                           audio_bytes, via="ytdlp", fmt="mp3", thumb=thumb,
                           quality=f"mp3 {MP3_BITRATE}k{star}", length=duration,
-                          info=f"mp3  {MP3_BITRATE}k",
+                          info=f"from {codec_name(best_audio.get('acodec'))}",
                           details=head + f"\n\naudio  mp3  {MP3_BITRATE}k"
                                          f"\nre-encoded from the source track"
                                          f"\ncontainer  mp3"))
@@ -876,7 +894,7 @@ def tweet_items(data: dict, tweet: str) -> list[Item]:
                         if size.get("width") else "")
                 items.append(Item(f"{base}?name=orig", f"{title} [{n}].jpg",
                                   "image", thumb=f"{base}?name=small",
-                                  quality=dims or "original",
+                                  quality="original", res=dims,
                                   details=f"photo  original upload\n{dims}"))
             continue
         variants = [v for v in (m.get("video_info") or {}).get("variants") or []
@@ -888,9 +906,10 @@ def tweet_items(data: dict, tweet: str) -> list[Item]:
             secs = (data.get("duration_millis") or 0) / 1000
             items.append(Item(v["url"], f"{title} [{n}] [{label}]", "video",
                               size=int((v.get("bitrate") or 0) / 8 * secs),
-                              quality=f"{label} mp4", length=clock(secs),
+                              quality=f"{label} mp4", res=dims,
+                              length=clock(secs),
                               thumb=base,
-                              info="  ".join(b for b in (dims, "mp4") if b),
+                              info="mp4",
                               details=f"video  mp4  {dims}\n"
                                       f"bitrate  {round((v.get('bitrate') or 0) / 1000)}k"))
     return items
@@ -927,10 +946,24 @@ def scan_media(url: str, proxy: str | None, log,
             info = ydl.extract_info(url, download=False)
     except Exception as exc:
         reason = ANSI.sub("", str(exc)).replace("ERROR: ", "").strip()
-        # A generic-extractor miss just means "not a media site"; a named
-        # extractor failing is a real error the user should see.
-        known = not reason.lower().startswith("[generic]")
-        return [], reason if known else ""
+        # "This is not a media site" has to be told apart from "this site is a
+        # media site and something went wrong", because the first one means go
+        # and scrape the page and the second one is worth showing the user.
+        #
+        # yt-dlp says the first with UnsupportedError, wrapped inside the
+        # DownloadError it actually raises - reachable through .exc_info. That
+        # was previously guessed at from the message text, which never matched,
+        # so every ordinary web page came back as a hard error and the page
+        # scraper below was unreachable.
+        from yt_dlp.utils import UnsupportedError
+        inner = getattr(exc, "exc_info", (None, None, None))[1]
+        if isinstance(inner, UnsupportedError) or isinstance(exc, UnsupportedError):
+            return [], ""
+        # A generic-extractor miss means the same thing: it looked, and there
+        # was no media on the page for it to take.
+        if reason.lower().startswith("[generic]"):
+            return [], ""
+        return [], reason
     if not info:
         return [], ""
 
@@ -1546,8 +1579,8 @@ class App:
         # the "headings" this used when the mark was the text "[x]".
         self.boxes = checkbox_images()
         self.tree = ttk.Treeview(self.table,
-                                 columns=("kind", "quality", "length", "size",
-                                          "info", "name"),
+                                 columns=("kind", "quality", "res", "length",
+                                          "size", "info", "name"),
                                  show="tree headings", style="T.Treeview",
                                  selectmode="extended")
         self.tree.heading("#0", text="")
@@ -1558,12 +1591,13 @@ class App:
         # the other. INFO and NAME both stretch: NAME folds away for a single
         # video, and without a second stretching column the table would stop
         # short and leave dead space to the right of it.
-        for col, txt, w in (("kind", self.t("col_type"), 90),
-                            ("quality", self.t("col_quality"), 120),
-                            ("length", self.t("col_length"), 80),
-                            ("size", self.t("col_size"), 80),
-                            ("info", self.t("col_info"), 250),
-                            ("name", self.t("col_name"), 260)):
+        for col, txt, w in (("kind", self.t("col_type"), 86),
+                            ("quality", self.t("col_quality"), 116),
+                            ("res", self.t("col_res"), 112),
+                            ("length", self.t("col_length"), 76),
+                            ("size", self.t("col_size"), 76),
+                            ("info", self.t("col_info"), 190),
+                            ("name", self.t("col_name"), 240)):
             self.tree.heading(col, text=txt, anchor="center")
             self.tree.column(col, width=w, anchor="center", minwidth=56,
                              stretch=(col in ("info", "name")))
@@ -1778,7 +1812,7 @@ class App:
         """
         names = {it.name for it in items}
         shared = items and len(names) == 1
-        columns = ("kind", "quality", "length", "size", "info")
+        columns = ("kind", "quality", "res", "length", "size", "info")
         if shared:
             self.source_line.config(text=next(iter(names)))
             self.source_line.pack(before=self.table, fill="x", pady=(0, 8))
@@ -1794,7 +1828,9 @@ class App:
         it = self.items[self.tree.index(rows[0])]
         self.preview_token += 1
         token = self.preview_token
-        head_bits = "  ".join(b for b in (it.kind, it.quality) if b)
+        head_bits = "  ".join(b for b in (self.t("kind_" + it.kind),
+                                          self.quality_text(it.quality),
+                                          it.res) if b)
         block = [f"{head_bits}  ::  {human(it.size)}", "", it.name]
         if it.details:
             block += ["", it.details]
@@ -1847,11 +1883,11 @@ class App:
         if not dims:
             return
         for i, it in enumerate(self.items):
-            if it.thumb == thumb_url and it.kind == "image" and not it.quality:
-                it.quality = dims
+            if it.thumb == thumb_url and it.kind == "image" and not it.res:
+                it.res = dims
                 rows = self.tree.get_children()
                 if i < len(rows):
-                    self.tree.set(rows[i], "quality", dims)
+                    self.tree.set(rows[i], "res", dims)
 
     def clear_thumb(self, text=""):
         """No picture: a line of explanation where the picture would be."""
@@ -2381,8 +2417,9 @@ class App:
                                          image=self.boxes["off"],
                                          values=(self.t("kind_" + it.kind),
                                                  self.quality_text(it.quality),
-                                                 it.length, human(it.size),
-                                                 it.info, it.name))
+                                                 it.res, it.length,
+                                                 human(it.size), it.info,
+                                                 it.name))
                     self.show_source_line(a)
         except queue.Empty:
             pass
@@ -2532,6 +2569,7 @@ def selftest():
     # four videos, then the source audio track, then the mp3 re-encode - all of
     # which are "video" or "audio", with the resolution in its own field
     assert [r.kind for r in rows] == ["video"] * 4 + ["audio"] * 2,         [r.kind for r in rows]
+    assert [r.res for r in rows[:4]] == ["?x2160", "?x1080", "?x360", "?x270"],         [r.res for r in rows]
     assert [r.quality.split()[0] for r in rows[:4]] == ["2160p", "1080p", "360p", "270p"],         [r.quality for r in rows]
     assert all(r.length == "" for r in rows), "no duration in this fixture"
 
@@ -2546,7 +2584,9 @@ def selftest():
          "height": 256, "width": 144, "ext": "mp4", "filesize": 500},
     ]}, "short", "u")
     assert [r.quality.split()[0] for r in tall[:2]] == ["1080p", "144p"],         [r.quality for r in tall]
-    assert tall[0].info.startswith("1080x1920"), tall[0].info
+    # dimensions are a column, not the front of the info line
+    assert tall[0].res == "1080x1920", tall[0].res
+    assert "1080x1920" not in tall[0].info, tall[0].info
     # duration has a column of its own now, so it is not also in the info line
     assert tall[0].length == "0:15", tall[0].length
     assert "0:15" not in tall[0].info, tall[0].info
@@ -2571,6 +2611,29 @@ def selftest():
     assert merge_mark(True, False) == "", "progressive never needs the flag"
     assert rows[4].size == 1000 and rows[4].fmt == "a"
     assert media_variants({"formats": []}, "x", "u") == []
+
+    # every source audio track gets a row, best bitrate first, and the mp3
+    # re-encode sits last - it is not a better copy of any of them, it is one
+    # of them decoded and encoded again
+    many = media_variants({"duration": 15, "formats": [
+        {"format_id": "249", "vcodec": "none", "acodec": "opus", "abr": 50,
+         "ext": "webm", "filesize": 95_000},
+        {"format_id": "251", "vcodec": "none", "acodec": "opus", "abr": 130,
+         "ext": "webm", "filesize": 244_000},
+        {"format_id": "140", "vcodec": "none", "acodec": "mp4a", "abr": 128,
+         "ext": "m4a", "filesize": 237_400},
+        {"format_id": "dup", "vcodec": "none", "acodec": "opus", "abr": 130,
+         "ext": "webm", "filesize": 244_000},
+        {"format_id": "v", "vcodec": "avc1", "acodec": "none", "height": 720,
+         "width": 1280, "ext": "mp4", "filesize": 900_000},
+    ]}, "clip", "u")
+    audio_rows = [r for r in many if r.kind == "audio"]
+    sources = [r for r in audio_rows if not r.quality.startswith("mp3")]
+    assert len(sources) == 3, [r.quality for r in sources]   # the duplicate folded in
+    rates = [int(r.quality.split()[-1].rstrip("k")) for r in sources]
+    assert rates == sorted(rates, reverse=True), rates
+    assert audio_rows[-1].quality.startswith("mp3"), "the re-encode goes last"
+    assert all(r.res == "" for r in audio_rows), "audio has no resolution"
 
     # resume: 206 appends to what is on disk, anything else starts clean
     assert resume_plan(500, 206, 1500) == ("ab", 500, 2000)

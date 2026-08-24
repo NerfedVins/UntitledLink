@@ -28,7 +28,7 @@ STRINGS = {
         "browse": "...", "save": "save", "cancel": "cancel",
         "quality": "quality", "save_to": "save to",
         "col_type": "TYPE", "col_size": "SIZE", "col_info": "INFO",
-        "col_quality": "QUALITY", "col_length": "LENGTH",
+        "col_quality": "QUALITY", "col_length": "LENGTH", "col_res": "RESOLUTION",
         "source": "source",
         "dlg_dblclick": "double click a row to download it",
         "dlg_dblclick_hint": "Off by default. The first click of the pair has\n"
@@ -85,7 +85,7 @@ STRINGS = {
         "save": "αποθήκευση", "cancel": "άκυρο",
         "quality": "ποιότητα", "save_to": "αποθήκευση σε",
         "col_type": "ΤΥΠΟΣ", "col_size": "ΜΕΓΕΘΟΣ", "col_info": "ΣΤΟΙΧΕΙΑ",
-        "col_quality": "ΠΟΙΟΤΗΤΑ", "col_length": "ΔΙΑΡΚΕΙΑ",
+        "col_quality": "ΠΟΙΟΤΗΤΑ", "col_length": "ΔΙΑΡΚΕΙΑ", "col_res": "ΑΝΑΛΥΣΗ",
         "source": "πηγή",
         "dlg_dblclick": "διπλό κλικ σε γραμμή για λήψη",
         "dlg_dblclick_hint": "Ανενεργό εξ ορισμού. Το πρώτο κλικ έχει ήδη\n"
@@ -140,7 +140,7 @@ STRINGS = {
         "save": "guardar", "cancel": "cancelar",
         "quality": "calidad", "save_to": "guardar en",
         "col_type": "TIPO", "col_size": "TAMAÑO", "col_info": "DATOS",
-        "col_quality": "CALIDAD", "col_length": "DURACIÓN",
+        "col_quality": "CALIDAD", "col_length": "DURACIÓN", "col_res": "RESOLUCIÓN",
         "source": "fuente",
         "dlg_dblclick": "doble clic en una fila para descargarla",
         "dlg_dblclick_hint": "Desactivado por defecto. El primer clic ya marca\n"
@@ -196,7 +196,7 @@ STRINGS = {
         "save": "speichern", "cancel": "abbrechen",
         "quality": "qualität", "save_to": "speichern in",
         "col_type": "TYP", "col_size": "GRÖSSE", "col_info": "INFOS",
-        "col_quality": "QUALITÄT", "col_length": "DAUER",
+        "col_quality": "QUALITÄT", "col_length": "DAUER", "col_res": "AUFLÖSUNG",
         "source": "Quelle",
         "dlg_dblclick": "Doppelklick auf eine Zeile lädt sie herunter",
         "dlg_dblclick_hint": "Standardmäßig aus. Der erste Klick markiert die\n"

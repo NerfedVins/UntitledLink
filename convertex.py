@@ -378,13 +378,14 @@ class Item:
     doc, archive, file - and quality carries how good a copy it is.
     """
 
-    __slots__ = ("url", "name", "kind", "quality", "size", "via", "fmt",
-                 "thumb", "info", "details")
+    __slots__ = ("url", "name", "kind", "quality", "length", "size", "via",
+                 "fmt", "thumb", "info", "details")
 
     def __init__(self, url, name, kind, size=0, via="file", fmt=None, thumb=None,
-                 info="", details="", quality=""):
+                 info="", details="", quality="", length=""):
         self.url, self.name, self.kind = url, name, kind
         self.quality = quality  # "1080p", "320k", "2048x1365" - display only
+        self.length = length    # "2:41"; its own column rather than buried in info
         self.size, self.via = size, via
         self.fmt = fmt  # explicit yt-dlp format selector; None = use the dropdown
         self.thumb = thumb      # url to show in the preview pane
@@ -748,13 +749,18 @@ def media_variants(info: dict, title: str, url: str) -> list[Item]:
     items = []
     for height in sorted(per_height, reverse=True):
         f, total = per_height[height]
+        width = f.get("width") or 0
+        # A resolution label names the short side. Using the height is only
+        # right for landscape: a 1080x1920 vertical video is a 1080p video,
+        # and calling it "1920p" is a number nobody uses.
+        label = f"{min(width, height) if width else height}p"
         progressive = has_audio(f)
         # Anything above ~360p on YouTube ships video and audio separately, so
         # the row is flagged and download_media refuses it without ffmpeg
         # rather than silently handing back a silent video.
         fmt = f["format_id"] if progressive else f"{f['format_id']}+ba/b[height<={height}]"
         mark = merge_mark(progressive, have_ffmpeg)
-        bits = [duration, f"{f.get('width') or '?'}x{height}"]
+        bits = [f"{width or '?'}x{height}"]
         if f.get("fps"):
             bits.append(f"{round(f['fps'])}fps")
         bits.append(codec_name(f.get("vcodec")))
@@ -771,14 +777,14 @@ def media_variants(info: dict, title: str, url: str) -> list[Item]:
                           + "  (merged in)")
         detail.append(f"container  {f.get('ext') or '?'}")
         items.append(Item(url, title, "video", total, via="ytdlp", fmt=fmt,
-                          quality=f"{height}p {f.get('ext') or ''}{mark}".strip(),
-                          thumb=thumb,
+                          quality=f"{label} {f.get('ext') or ''}{mark}".strip(),
+                          length=duration, thumb=thumb,
                           info="  ".join(b for b in bits if b),
                           details=head + "\n\n" + "\n".join(detail)))
 
     if best_audio:
         acodec = codec_name(best_audio.get("acodec"))
-        abits = [duration, acodec]
+        abits = [acodec]
         if best_audio.get("abr"):
             abits.append(f"{round(best_audio['abr'])}k")
         if best_audio.get("asr"):
@@ -792,7 +798,7 @@ def media_variants(info: dict, title: str, url: str) -> list[Item]:
             aquality += f" {round(best_audio['abr'])}k"
         items.append(Item(url, title, "audio",
                           audio_bytes, via="ytdlp", fmt=best_audio["format_id"],
-                          quality=aquality,
+                          quality=aquality, length=duration,
                           thumb=thumb, info="  ".join(b for b in abits if b),
                           details=head + "\n\n" + "\n".join(adetail)))
         # Re-encoded to mp3 at 320k. Size is the source track's - the mp3 lands
@@ -800,8 +806,8 @@ def media_variants(info: dict, title: str, url: str) -> list[Item]:
         star = merge_mark(False, have_ffmpeg)
         items.append(Item(url, title, "audio",
                           audio_bytes, via="ytdlp", fmt="mp3", thumb=thumb,
-                          quality=f"mp3 {MP3_BITRATE}k{star}",
-                          info=f"{duration}  mp3  {MP3_BITRATE}k".strip(),
+                          quality=f"mp3 {MP3_BITRATE}k{star}", length=duration,
+                          info=f"mp3  {MP3_BITRATE}k",
                           details=head + f"\n\naudio  mp3  {MP3_BITRATE}k"
                                          f"\nre-encoded from the source track"
                                          f"\ncontainer  mp3"))
@@ -882,9 +888,9 @@ def tweet_items(data: dict, tweet: str) -> list[Item]:
             secs = (data.get("duration_millis") or 0) / 1000
             items.append(Item(v["url"], f"{title} [{n}] [{label}]", "video",
                               size=int((v.get("bitrate") or 0) / 8 * secs),
-                              quality=f"{label} mp4", thumb=base,
-                              info="  ".join(b for b in (clock(secs), dims,
-                                                         "mp4") if b),
+                              quality=f"{label} mp4", length=clock(secs),
+                              thumb=base,
+                              info="  ".join(b for b in (dims, "mp4") if b),
                               details=f"video  mp4  {dims}\n"
                                       f"bitrate  {round((v.get('bitrate') or 0) / 1000)}k"))
     return items
@@ -943,7 +949,7 @@ def scan_media(url: str, proxy: str | None, log,
         # setting asks for at download time rather than something to pick here.
         return [Item(url, title, "video", _fsize(info), via="ytdlp",
                      thumb=info.get("thumbnail"), quality="as set",
-                     info=clock(info.get("duration")))], ""
+                     length=clock(info.get("duration")))], ""
 
     entries = list(entries)
     if len(entries) > MAX_ENTRIES:
@@ -962,7 +968,7 @@ def scan_media(url: str, proxy: str | None, log,
         # resolution this cannot honestly promise.
         items.append(Item(link, title, "video", size, via="ytdlp",
                           thumb=e.get("thumbnail"), quality="as set",
-                          info=clock(e.get("duration"))))
+                          length=clock(e.get("duration"))))
     return items, ""
 
 
@@ -1521,25 +1527,37 @@ class App:
 
         left = tk.Frame(wrap, bg=C["bg"])
         left.pack(side="left", fill="both", expand=True)
+        # Every row of one video carries the same title, so it is said once here
+        # and the NAME column is dropped rather than repeated ten times across
+        # the widest part of a maximised window.
+        self.source_line = tk.Label(left, bg=C["bg"], fg=C["fg"], font=self.fb,
+                                    anchor="w")
+        self.table = tk.Frame(left, bg=C["bg"])
+        self.table.pack(fill="both", expand=True)
         # The checkbox lives in the tree column (#0) because that is the only
         # one Treeview will draw an image in, so "tree headings" rather than
         # the "headings" this used when the mark was the text "[x]".
         self.boxes = checkbox_images()
-        self.tree = ttk.Treeview(left,
-                                 columns=("kind", "quality", "size", "info", "name"),
+        self.tree = ttk.Treeview(self.table,
+                                 columns=("kind", "quality", "length", "size",
+                                          "info", "name"),
                                  show="tree headings", style="T.Treeview",
                                  selectmode="extended")
         self.tree.heading("#0", text="")
         self.tree.column("#0", width=38, minwidth=38, stretch=False,
                          anchor="center")
-        for col, txt, w, anchor in (("kind", self.t("col_type"), 74, "w"),
-                                    ("quality", self.t("col_quality"), 104, "w"),
+        for col, txt, w, anchor in (("kind", self.t("col_type"), 78, "w"),
+                                    ("quality", self.t("col_quality"), 108, "w"),
+                                    ("length", self.t("col_length"), 62, "e"),
                                     ("size", self.t("col_size"), 66, "e"),
-                                    ("info", self.t("col_info"), 250, "w"),
-                                    ("name", self.t("col_name"), 300, "w")):
-            self.tree.heading(col, text=txt)
+                                    ("info", self.t("col_info"), 230, "w"),
+                                    ("name", self.t("col_name"), 280, "w")):
+            # A heading takes its own anchor, and the default is centre - which
+            # is why every title floated over the middle of a column whose
+            # contents were pushed to one edge.
+            self.tree.heading(col, text=txt, anchor=anchor)
             self.tree.column(col, width=w, anchor=anchor, stretch=(col == "name"))
-        sb = ttk.Scrollbar(left, orient="vertical", command=self.tree.yview,
+        sb = ttk.Scrollbar(self.table, orient="vertical", command=self.tree.yview,
                            style="T.Vertical.TScrollbar")
         self.tree.configure(yscrollcommand=sb.set)
         self.tree.pack(side="left", fill="both", expand=True)
@@ -1681,6 +1699,7 @@ class App:
         self.tree.delete(*self.tree.get_children())
         self.items = []
         self.marked.clear()
+        self.show_source_line([])
         self.clear_thumb(self.t("preview_hint"))
         self.meta_box.config(text="")
         self.url.focus_set()
@@ -1715,6 +1734,36 @@ class App:
             return
         total = sum(self.items[self.tree.index(r)].size for r in self.marked)
         self.say(self.t("marked", n=n, size=human(total)), C["green"])
+
+    # Quality is mostly technical strings - "1080p mp4", "mp3 320k" - which are
+    # the same in every language and stay put. These few are ordinary words
+    # standing in for a value, so they get translated like any other label.
+    QUALITY_WORDS = {"as set": "q_as_set", "original": "q_original",
+                     "audio": "q_audio"}
+
+    def quality_text(self, quality: str) -> str:
+        key = self.QUALITY_WORDS.get(quality)
+        return self.t(key) if key else quality
+
+    def show_source_line(self, items):
+        """Name the thing that was scanned, once, above the list.
+
+        A single video hands back one row per resolution, all sharing a title,
+        so the NAME column was the same string over and over - and on a
+        maximised window that string had the most space of anything on screen.
+        When the rows disagree, as they do for a scraped page, NAME is the only
+        thing telling them apart and stays.
+        """
+        names = {it.name for it in items}
+        shared = items and len(names) == 1
+        columns = ("kind", "quality", "length", "size", "info")
+        if shared:
+            self.source_line.config(text=next(iter(names)))
+            self.source_line.pack(before=self.table, fill="x", pady=(0, 8))
+            self.tree.configure(displaycolumns=columns)
+        else:
+            self.source_line.pack_forget()
+            self.tree.configure(displaycolumns=columns + ("name",))
 
     def show_preview(self):
         rows = self.tree.selection()
@@ -2300,9 +2349,11 @@ class App:
                         tag = it.kind if it.kind in TAG_COLOURS else "file"
                         self.tree.insert("", "end", tags=(tag,),
                                          image=self.boxes["off"],
-                                         values=(it.kind, it.quality,
-                                                 human(it.size), it.info,
-                                                 it.name))
+                                         values=(self.t("kind_" + it.kind),
+                                                 self.quality_text(it.quality),
+                                                 it.length, human(it.size),
+                                                 it.info, it.name))
+                    self.show_source_line(a)
         except queue.Empty:
             pass
         self.tick = self.root.after(80, self.pump)
@@ -2452,6 +2503,24 @@ def selftest():
     # which are "video" or "audio", with the resolution in its own field
     assert [r.kind for r in rows] == ["video"] * 4 + ["audio"] * 2,         [r.kind for r in rows]
     assert [r.quality.split()[0] for r in rows[:4]] == ["2160p", "1080p", "360p", "270p"],         [r.quality for r in rows]
+    assert all(r.length == "" for r in rows), "no duration in this fixture"
+
+    # a vertical video is named by its short side; "1920p" for a 1080x1920
+    # phone clip is a number nobody uses
+    tall = media_variants({"duration": 15, "formats": [
+        {"format_id": "a", "vcodec": "none", "acodec": "mp4a", "abr": 130,
+         "ext": "m4a", "filesize": 1000},
+        {"format_id": "v", "vcodec": "avc1", "acodec": "none",
+         "height": 1920, "width": 1080, "ext": "mp4", "filesize": 5000},
+        {"format_id": "w", "vcodec": "avc1", "acodec": "none",
+         "height": 256, "width": 144, "ext": "mp4", "filesize": 500},
+    ]}, "short", "u")
+    assert [r.quality.split()[0] for r in tall[:2]] == ["1080p", "144p"],         [r.quality for r in tall]
+    assert tall[0].info.startswith("1080x1920"), tall[0].info
+    # duration has a column of its own now, so it is not also in the info line
+    assert tall[0].length == "0:15", tall[0].length
+    assert "0:15" not in tall[0].info, tall[0].info
+    assert all(r.length == "0:15" for r in tall), [r.length for r in tall]
     assert rows[5].quality.startswith("mp3 "), rows[5].quality
     assert rows[0].name == "clip", "the title is the name, the rest is quality"
     assert all(r.kind in TAG_COLOURS for r in rows), "a row with no colour"
@@ -2652,6 +2721,45 @@ def ui_selftest():
                 assert bottom <= dlg[0].winfo_rooty() + dlg[0].winfo_height(),                     f"{b.cget('text')} sits below the dialog"
         dlg[0].grab_release()
         dlg[0].destroy()
+
+        # a heading defaults to centre while its column may be left or right
+        # aligned, which had every title floating over the wrong place
+        for col in app.tree.cget("columns"):
+            assert str(app.tree.heading(col)["anchor"]) ==                    str(app.tree.column(col)["anchor"]), f"{col} heading adrift"
+
+        # one video means one title on every row, so it is said once above the
+        # list and the NAME column folds away
+        same = [Item("u", "one title", "video", 1, quality="1080p mp4",
+                     length="0:15") for _ in range(4)]
+        app.q.put(("items", same, None))
+        app.pump()
+        root.update()
+        # winfo_manager rather than winfo_ismapped: the window is withdrawn
+        # here, so nothing in it counts as mapped whether it is packed or not
+        assert app.source_line.winfo_manager() == "pack", "no source line for a shared title"
+        assert app.source_line.cget("text") == "one title"
+        assert "name" not in app.tree.cget("displaycolumns")
+        app.q.put(("items", [Item("u", "a.jpg", "image", 1),
+                             Item("u", "b.pdf", "doc", 2)], None))
+        app.pump()
+        root.update()
+        assert app.source_line.winfo_manager() == "", "source line outstayed its rows"
+        assert "name" in app.tree.cget("displaycolumns"), "NAME must return"
+
+        # categories are words in the user's language; format names are not
+        for code in LANGUAGES:
+            app.t.set(code)
+            for kind in TAG_COLOURS:
+                shown = app.t("kind_" + kind)
+                assert shown and shown != "kind_" + kind, f"{code}/{kind} untranslated"
+            assert app.quality_text("1080p mp4") == "1080p mp4", "format names stay"
+            assert app.quality_text("as set") != "as set" or code == "en"
+        app.t.set("en")
+
+        app.q.put(("items", [Item("https://h/a.jpg", "a.jpg", "image", 100),
+                             Item("https://h/b.mp4", "b.mp4", "video", 200)], None))
+        app.pump()
+        rows = app.tree.get_children()
 
         # the mark column is three drawn images now, not the text "[x]"
         assert set(app.boxes) == {"off", "on", "cut"}, app.boxes

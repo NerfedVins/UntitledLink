@@ -336,3 +336,25 @@ quality column rather than promising a resolution nothing has checked yet.
 
 `download` appears twice, once above the list and once in the status bar. On a
 tall window the bottom one is a long way from where you finish picking rows.
+
+## The columns
+
+`TYPE` is what a row is - and it is translated, because those are words.
+`QUALITY`, `LENGTH`, `SIZE` and `INFO` carry format names - `mp4`, `vp9`,
+`avc1`, `fps`, `kHz` - which are not translated in any language, because they
+are what the format is called rather than something to say in Greek.
+
+**A resolution label names the short side.** A 1080x1920 phone clip is a 1080p
+video; calling it `1920p`, which is what using the height gives you, is a
+number nobody uses. Landscape is unaffected - there the short side is the
+height anyway.
+
+**Duration has its own column.** It used to sit unlabelled at the front of the
+INFO line, next to the dimensions and the codec, with nothing saying what it
+was.
+
+**NAME folds away when every row has the same one.** One video hands back a row
+per resolution, all sharing a title, and on a maximised window that repeated
+title had more space than anything else on screen. The title is shown once
+above the list instead. A scraped page, where the names are what tell the rows
+apart, keeps the column.

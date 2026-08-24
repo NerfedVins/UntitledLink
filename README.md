@@ -217,7 +217,7 @@ does not remember.
 
 ## Settings
 
-The `settings` button next to the quality box opens the dialog: **language**,
+The `settings` button opens the dialog: **language**, **quality**,
 **download folder**, proxy, browser cookies, strip-metadata, and tries per file.
 It also shows where ffmpeg was found. A short line beside the button says what is
 currently on - `proxy  cookies:firefox  strip` - so nothing is silently active.
@@ -319,3 +319,20 @@ read, which is the one thing a thread cannot be talked out of - so what stopping
 does is hand the window back immediately and throw the answer away when it
 finally arrives. yt-dlp's side of a scan is bounded by the same 60s socket
 timeout the downloader uses, so nothing waits forever either way.
+
+## Type and quality are two different questions
+
+The TYPE column says what a row **is** - video, audio, image, doc, archive,
+file - and nothing else. How good a copy it is lives in QUALITY: `1080p webm`,
+`mp3 320k`, `2048x1365`. These used to share one column, which is how a list
+could show `1080p`, `image` and `media` side by side as if they were the same
+kind of answer.
+
+The quality dropdown moved into settings, because it only ever applied to
+**playlists** and to pages that hand over no format list. Anywhere the scan can
+read the formats - which is nearly everywhere - each resolution is already its
+own row and the dropdown was ignored. Rows it does apply to say `as set` in the
+quality column rather than promising a resolution nothing has checked yet.
+
+`download` appears twice, once above the list and once in the status bar. On a
+tall window the bottom one is a long way from where you finish picking rows.

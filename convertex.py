@@ -122,8 +122,10 @@ C = {
 }
 
 
-TAG_COLOURS = {"image": C["cyan"], "media": C["green"],
-               "video": C["green"], "audio": C["amber"]}
+# Keyed by Item.kind, which is now a closed set: every row lands on one of
+# these, so nothing falls through to a catch-all colour any more.
+TAG_COLOURS = {"video": C["green"], "audio": C["amber"], "image": C["cyan"],
+               "doc": C["fg"], "archive": C["dim"], "file": C["dim"]}
 
 APP_DIR = os.path.dirname(os.path.abspath(
     sys.executable if getattr(sys, "frozen", False) else __file__))
@@ -368,12 +370,21 @@ def strip_metadata(path: str) -> bool:
 # --------------------------------------------------------------------------
 
 class Item:
-    __slots__ = ("url", "name", "kind", "size", "via", "fmt", "thumb",
-                 "info", "details")
+    """One downloadable thing.
+
+    kind and quality used to be the same field, which is why a list could show
+    "1080p" and "image" and "media" in one column as if they were the same sort
+    of answer. kind is now only ever what the thing IS - video, audio, image,
+    doc, archive, file - and quality carries how good a copy it is.
+    """
+
+    __slots__ = ("url", "name", "kind", "quality", "size", "via", "fmt",
+                 "thumb", "info", "details")
 
     def __init__(self, url, name, kind, size=0, via="file", fmt=None, thumb=None,
-                 info="", details=""):
+                 info="", details="", quality=""):
         self.url, self.name, self.kind = url, name, kind
+        self.quality = quality  # "1080p", "320k", "2048x1365" - display only
         self.size, self.via = size, via
         self.fmt = fmt  # explicit yt-dlp format selector; None = use the dropdown
         self.thumb = thumb      # url to show in the preview pane
@@ -759,8 +770,9 @@ def media_variants(info: dict, title: str, url: str) -> list[Item]:
                           + (f"  {round(best_audio['abr'])}k" if best_audio.get("abr") else "")
                           + "  (merged in)")
         detail.append(f"container  {f.get('ext') or '?'}")
-        items.append(Item(url, f"{title}  [{height}p {f.get('ext') or ''}{mark}]",
-                          f"{height}p", total, via="ytdlp", fmt=fmt, thumb=thumb,
+        items.append(Item(url, title, "video", total, via="ytdlp", fmt=fmt,
+                          quality=f"{height}p {f.get('ext') or ''}{mark}".strip(),
+                          thumb=thumb,
                           info="  ".join(b for b in bits if b),
                           details=head + "\n\n" + "\n".join(detail)))
 
@@ -775,15 +787,20 @@ def media_variants(info: dict, title: str, url: str) -> list[Item]:
             abits.append("stereo")
         adetail = [f"audio  {acodec}  source track, not re-encoded",
                    f"container  {best_audio.get('ext') or '?'}"]
-        items.append(Item(url, f"{title}  [audio {best_audio.get('ext', '')}]", "audio",
+        aquality = best_audio.get("ext") or "audio"
+        if best_audio.get("abr"):
+            aquality += f" {round(best_audio['abr'])}k"
+        items.append(Item(url, title, "audio",
                           audio_bytes, via="ytdlp", fmt=best_audio["format_id"],
+                          quality=aquality,
                           thumb=thumb, info="  ".join(b for b in abits if b),
                           details=head + "\n\n" + "\n".join(adetail)))
         # Re-encoded to mp3 at 320k. Size is the source track's - the mp3 lands
         # near it, and guessing precisely would mean decoding first.
         star = merge_mark(False, have_ffmpeg)
-        items.append(Item(url, f"{title}  [mp3 {MP3_BITRATE}k{star}]", "mp3",
+        items.append(Item(url, title, "audio",
                           audio_bytes, via="ytdlp", fmt="mp3", thumb=thumb,
+                          quality=f"mp3 {MP3_BITRATE}k{star}",
                           info=f"{duration}  mp3  {MP3_BITRATE}k".strip(),
                           details=head + f"\n\naudio  mp3  {MP3_BITRATE}k"
                                          f"\nre-encoded from the source track"
@@ -852,7 +869,8 @@ def tweet_items(data: dict, tweet: str) -> list[Item]:
                 dims = (f"{size['width']}x{size['height']}"
                         if size.get("width") else "")
                 items.append(Item(f"{base}?name=orig", f"{title} [{n}].jpg",
-                                  "image", thumb=f"{base}?name=small", info=dims,
+                                  "image", thumb=f"{base}?name=small",
+                                  quality=dims or "original",
                                   details=f"photo  original upload\n{dims}"))
             continue
         variants = [v for v in (m.get("video_info") or {}).get("variants") or []
@@ -862,9 +880,9 @@ def tweet_items(data: dict, tweet: str) -> list[Item]:
             label = f"{wh.group(2)}p" if wh else "video"
             dims = f"{wh.group(1)}x{wh.group(2)}" if wh else ""
             secs = (data.get("duration_millis") or 0) / 1000
-            items.append(Item(v["url"], f"{title} [{n}] [{label}]", label,
+            items.append(Item(v["url"], f"{title} [{n}] [{label}]", "video",
                               size=int((v.get("bitrate") or 0) / 8 * secs),
-                              thumb=base,
+                              quality=f"{label} mp4", thumb=base,
                               info="  ".join(b for b in (clock(secs), dims,
                                                          "mp4") if b),
                               details=f"video  mp4  {dims}\n"
@@ -921,8 +939,10 @@ def scan_media(url: str, proxy: str | None, log,
             note = " :: * needs ffmpeg" if starred and not ffmpeg_path() else ""
             log(f"{len(variants)} variants :: pick a resolution{note}")
             return variants, ""
-        return [Item(url, title, "media", _fsize(info), via="ytdlp",
-                     thumb=info.get("thumbnail"),
+        # No per-format list, so the resolution is whatever the quality
+        # setting asks for at download time rather than something to pick here.
+        return [Item(url, title, "video", _fsize(info), via="ytdlp",
+                     thumb=info.get("thumbnail"), quality="as set",
                      info=clock(info.get("duration")))], ""
 
     entries = list(entries)
@@ -937,8 +957,11 @@ def scan_media(url: str, proxy: str | None, log,
         link = e.get("webpage_url") or e.get("url") or url
         title = (e.get("title") or name_from_url(link)).strip()
         size = e.get("filesize") or e.get("filesize_approx") or 0
-        items.append(Item(link, title, "media", size, via="ytdlp",
-                          thumb=e.get("thumbnail"),
+        # extract_flat means the formats are not known yet, so these download
+        # at whatever the quality setting says. Hence "as set" rather than a
+        # resolution this cannot honestly promise.
+        items.append(Item(link, title, "video", size, via="ytdlp",
+                          thumb=e.get("thumbnail"), quality="as set",
                           info=clock(e.get("duration"))))
     return items, ""
 
@@ -1469,14 +1492,17 @@ class App:
 
         opt = tk.Frame(self.root, bg=C["bg"])
         opt.pack(fill="x", pady=(10, 0), **pad)
-        self.label(opt, self.t("quality")).pack(side="left")
-        self.quality = ttk.Combobox(opt, values=list(FORMATS), state="readonly",
-                                    width=11, style="T.TCombobox", font=self.f,
-                                    textvariable=self.quality_var)
-        self.quality.pack(side="left", padx=(6, 16))
+        # The download button is repeated here because the one in the status
+        # bar sits below the list, which is a long way from where you finish
+        # choosing rows on a tall window.
+        self.dl_btn_top = self.button(opt, self.t("download"), self.do_download,
+                                      "amber")
+        self.dl_btn_top.pack(side="left", padx=(0, 16))
         self.button(opt, self.t("settings"), self.open_settings,
                     "cyan").pack(side="left")
-        self.settings_hint = tk.Label(opt, bg=C["bg"], fg=C["line"], font=self.f)
+        # C["line"] is a border colour; as text on the background it measured
+        # 1.44:1, which is not read so much as guessed at.
+        self.settings_hint = tk.Label(opt, bg=C["bg"], fg=C["dim"], font=self.f)
         self.settings_hint.pack(side="left", padx=(12, 0))
         self.refresh_hint()
 
@@ -1500,16 +1526,17 @@ class App:
         # the "headings" this used when the mark was the text "[x]".
         self.boxes = checkbox_images()
         self.tree = ttk.Treeview(left,
-                                 columns=("kind", "size", "info", "name"),
+                                 columns=("kind", "quality", "size", "info", "name"),
                                  show="tree headings", style="T.Treeview",
                                  selectmode="extended")
         self.tree.heading("#0", text="")
         self.tree.column("#0", width=38, minwidth=38, stretch=False,
                          anchor="center")
-        for col, txt, w, anchor in (("kind", self.t("col_type"), 66, "w"),
+        for col, txt, w, anchor in (("kind", self.t("col_type"), 74, "w"),
+                                    ("quality", self.t("col_quality"), 104, "w"),
                                     ("size", self.t("col_size"), 66, "e"),
-                                    ("info", self.t("col_info"), 260, "w"),
-                                    ("name", self.t("col_name"), 340, "w")):
+                                    ("info", self.t("col_info"), 250, "w"),
+                                    ("name", self.t("col_name"), 300, "w")):
             self.tree.heading(col, text=txt)
             self.tree.column(col, width=w, anchor=anchor, stretch=(col == "name"))
         sb = ttk.Scrollbar(left, orient="vertical", command=self.tree.yview,
@@ -1696,7 +1723,8 @@ class App:
         it = self.items[self.tree.index(rows[0])]
         self.preview_token += 1
         token = self.preview_token
-        block = [f"{it.kind}  ::  {human(it.size)}", "", it.name]
+        head_bits = "  ".join(b for b in (it.kind, it.quality) if b)
+        block = [f"{head_bits}  ::  {human(it.size)}", "", it.name]
         if it.details:
             block += ["", it.details]
         block += ["", it.url[:200]]
@@ -1748,11 +1776,11 @@ class App:
         if not dims:
             return
         for i, it in enumerate(self.items):
-            if it.thumb == thumb_url and it.kind == "image" and not it.info:
-                it.info = dims
+            if it.thumb == thumb_url and it.kind == "image" and not it.quality:
+                it.quality = dims
                 rows = self.tree.get_children()
                 if i < len(rows):
-                    self.tree.set(rows[i], "info", dims)
+                    self.tree.set(rows[i], "quality", dims)
 
     def clear_thumb(self, text=""):
         """No picture: a line of explanation where the picture would be."""
@@ -1830,18 +1858,46 @@ class App:
         win.title(self.t("dlg_title"))
         win.configure(bg=C["bg"])
         win.transient(self.root)
-        win.resizable(False, False)
+        win.resizable(False, True)
 
-        body = tk.Frame(win, bg=C["bg"])
-        body.pack(fill="both", expand=True, padx=20, pady=18)
+        # The dialog had grown past 860px, which puts save and cancel below the
+        # bottom edge of a 768p laptop screen - a dialog you cannot agree to.
+        # The buttons are pinned outside the scrolling area so they are always
+        # reachable, and the settings themselves scroll when they have to.
+        foot = tk.Frame(win, bg=C["bg"])
+        foot.pack(side="bottom", fill="x", padx=20, pady=(10, 16))
+
+        outer = tk.Frame(win, bg=C["bg"])
+        outer.pack(side="top", fill="both", expand=True)
+        canvas = tk.Canvas(outer, bg=C["bg"], highlightthickness=0, bd=0)
+        scroll = ttk.Scrollbar(outer, orient="vertical", command=canvas.yview,
+                               style="T.Vertical.TScrollbar")
+        canvas.configure(yscrollcommand=scroll.set)
+        canvas.pack(side="left", fill="both", expand=True)
+        scroll.pack(side="right", fill="y")
+
+        body = tk.Frame(canvas, bg=C["bg"])
+        holder = canvas.create_window((0, 0), window=body, anchor="nw")
+
+        def reflow(_e=None):
+            canvas.configure(scrollregion=canvas.bbox("all"))
+            canvas.itemconfigure(holder, width=canvas.winfo_width())
+
+        body.bind("<Configure>", reflow)
+        canvas.bind("<Configure>", reflow)
+        # Bound on the toplevel rather than the canvas: a wheel event over one
+        # of the entries would otherwise never reach the thing that scrolls.
+        win.bind("<MouseWheel>",
+                 lambda e: canvas.yview_scroll(-e.delta // 120, "units"))
 
         def head(text):
             tk.Label(body, text=text, bg=C["bg"], fg=C["green"], font=self.fb,
-                     anchor="w").pack(fill="x", pady=(12, 3))
+                     anchor="w").pack(fill="x", padx=20, pady=(12, 3))
 
         def hint(text):
             tk.Label(body, text=text, bg=C["bg"], fg=C["dim"], font=self.f,
-                     anchor="w", justify="left").pack(fill="x", pady=(2, 0))
+                     anchor="w", justify="left").pack(fill="x", padx=20,
+                                                      pady=(2, 0))
 
         # language ---------------------------------------------------------
         head(self.t("dlg_language"))
@@ -1849,13 +1905,13 @@ class App:
         lang_box = ttk.Combobox(body, values=names, state="readonly", width=18,
                                 style="T.TCombobox", font=self.f)
         lang_box.set(LANGUAGES[self.t.lang])
-        lang_box.pack(anchor="w")
+        lang_box.pack(anchor="w", padx=20)
         hint(self.t("dlg_lang_note"))
 
         # download folder --------------------------------------------------
         head(self.t("save_to"))
         folder = tk.Frame(body, bg=C["bg"])
-        folder.pack(fill="x")
+        folder.pack(fill="x", padx=20)
         self.entry(folder, width=40, textvariable=self.outdir_var).pack(
             side="left", fill="x", expand=True, ipady=3)
         self.button(folder, self.t("browse"), self.pick_dir,
@@ -1864,15 +1920,25 @@ class App:
         # proxy ------------------------------------------------------------
         head(self.t("dlg_proxy"))
         self.entry(body, width=46, textvariable=self.proxy_var).pack(
-            fill="x", ipady=3)
+            fill="x", padx=20, ipady=3)
         hint(self.t("dlg_proxy_hint"))
+
+        # quality ----------------------------------------------------------
+        # Only reachable here because it only ever applies to playlists and to
+        # pages that hand over no format list. Anywhere the scan could read the
+        # formats, every resolution is its own row and this is ignored.
+        head(self.t("quality"))
+        ttk.Combobox(body, values=list(FORMATS), state="readonly", width=18,
+                     style="T.TCombobox", font=self.f,
+                     textvariable=self.quality_var).pack(anchor="w", padx=20)
+        hint(self.t("dlg_quality_hint"))
 
         # cookies ----------------------------------------------------------
         head(self.t("dlg_cookies"))
         cookie_box = ttk.Combobox(body, values=COOKIE_BROWSERS, state="readonly",
                                   width=18, style="T.TCombobox", font=self.f,
                                   textvariable=self.cookies_var)
-        cookie_box.pack(anchor="w")
+        cookie_box.pack(anchor="w", padx=20)
         hint(self.t("dlg_cookies_hint"))
 
         # metadata + attempts ----------------------------------------------
@@ -1881,7 +1947,7 @@ class App:
                        bg=C["bg"], fg=C["fg"], font=self.f, selectcolor=C["panel"],
                        activebackground=C["bg"], activeforeground=C["green"],
                        highlightthickness=0, borderwidth=0,
-                       cursor="hand2", anchor="w").pack(fill="x")
+                       cursor="hand2", anchor="w").pack(fill="x", padx=20)
         hint(self.t("dlg_strip_hint"))
 
         head(self.t("dlg_parallel"))
@@ -1889,25 +1955,24 @@ class App:
                    textvariable=self.parallel_var,
                    bg=C["panel"], fg=C["fg"], font=self.f, relief="flat",
                    buttonbackground=C["line"], insertbackground=C["green"],
-                   highlightthickness=1, highlightbackground=C["line"]).pack(anchor="w")
+                   highlightthickness=1,
+                   highlightbackground=C["line"]).pack(anchor="w", padx=20)
         hint(self.t("dlg_parallel_hint"))
 
         head(self.t("dlg_attempts"))
         tk.Spinbox(body, from_=1, to=10, width=5, textvariable=self.attempts_var,
                    bg=C["panel"], fg=C["fg"], font=self.f, relief="flat",
                    buttonbackground=C["line"], insertbackground=C["green"],
-                   highlightthickness=1, highlightbackground=C["line"]).pack(anchor="w")
+                   highlightthickness=1,
+                   highlightbackground=C["line"]).pack(anchor="w", padx=20)
 
         head(self.t("dlg_ffmpeg"))
         ff = ffmpeg_path()
         tk.Label(body, text=ff or self.t("dlg_ffmpeg_missing"), bg=C["bg"],
                  fg=C["fg"] if ff else C["amber"], font=self.f, anchor="w",
-                 wraplength=420, justify="left").pack(fill="x")
+                 wraplength=420, justify="left").pack(fill="x", padx=20)
 
         # buttons ----------------------------------------------------------
-        foot = tk.Frame(body, bg=C["bg"])
-        foot.pack(fill="x", pady=(20, 0))
-
         def apply_and_close():
             chosen = next((code for code, name in LANGUAGES.items()
                            if name == lang_box.get()), self.t.lang)
@@ -1926,9 +1991,15 @@ class App:
 
         win.bind("<Escape>", lambda _e: win.destroy())
         win.update_idletasks()
-        x = self.root.winfo_rootx() + (self.root.winfo_width() - win.winfo_width()) // 2
+        reflow()
+        wide = body.winfo_reqwidth() + scroll.winfo_reqwidth() + 8
+        tall = body.winfo_reqheight() + foot.winfo_reqheight() + 26
+        tall = min(tall, int(win.winfo_screenheight() * 0.82))
+        x = self.root.winfo_rootx() + (self.root.winfo_width() - wide) // 2
         y = self.root.winfo_rooty() + 60
-        win.geometry(f"+{max(x, 0)}+{max(y, 0)}")
+        # keep it on screen even when the main window sits low
+        y = min(y, max(0, win.winfo_screenheight() - tall - 40))
+        win.geometry(f"{wide}x{tall}+{max(x, 0)}+{max(y, 0)}")
         win.grab_set()
 
     def rebuild(self):
@@ -2185,7 +2256,7 @@ class App:
         self.busy = busy
         # A disabled ttk.Button also drops out of the Tab order, which the old
         # greyed-out Label did not - the state is now real, not just painted.
-        for b in (self.scan_btn, self.dl_btn, self.refresh_btn):
+        for b in (self.scan_btn, self.dl_btn, self.dl_btn_top, self.refresh_btn):
             b.state(["disabled"] if busy else ["!disabled"])
         if busy:
             self.prog.config(value=0)
@@ -2226,11 +2297,12 @@ class App:
                     for it in a:
                         # kind doubles as the resolution label ("2160p"), so fall
                         # back to the generic media tag for colouring those rows
-                        tag = it.kind if it.kind in TAG_COLOURS else "media"
+                        tag = it.kind if it.kind in TAG_COLOURS else "file"
                         self.tree.insert("", "end", tags=(tag,),
                                          image=self.boxes["off"],
-                                         values=(it.kind, human(it.size),
-                                                 it.info, it.name))
+                                         values=(it.kind, it.quality,
+                                                 human(it.size), it.info,
+                                                 it.name))
         except queue.Empty:
             pass
         self.tick = self.root.after(80, self.pump)
@@ -2326,7 +2398,11 @@ def selftest():
         ],
     }
     rows = tweet_items(payload, "1")
-    assert [r.kind for r in rows] == ["image", "1080p", "360p"], [r.kind for r in rows]
+    # kind says what it is, quality says how good a copy - never both in one
+    assert [r.kind for r in rows] == ["image", "video", "video"], [r.kind for r in rows]
+    # the photo carries no dimensions in this payload, and "?name=orig" really
+    # is the untouched upload, so that is what the quality cell says
+    assert [r.quality for r in rows] == ["original", "1080p mp4", "360p mp4"],         [r.quality for r in rows]
     assert rows[0].url.endswith("?name=orig"), "photos must fetch the original"
     assert rows[0].thumb.endswith("?name=small"), "preview uses the small copy"
     assert rows[1].size == 12960000, rows[1].size   # 10368000/8 * 10s
@@ -2372,17 +2448,23 @@ def selftest():
     assert not has_audio({"acodec": "none"})
 
     rows = media_variants(info, "clip", "https://x.com/v")
-    assert [r.kind for r in rows] == ["2160p", "1080p", "360p", "270p", "audio", "mp3"],         [r.kind for r in rows]
+    # four videos, then the source audio track, then the mp3 re-encode - all of
+    # which are "video" or "audio", with the resolution in its own field
+    assert [r.kind for r in rows] == ["video"] * 4 + ["audio"] * 2,         [r.kind for r in rows]
+    assert [r.quality.split()[0] for r in rows[:4]] == ["2160p", "1080p", "360p", "270p"],         [r.quality for r in rows]
+    assert rows[5].quality.startswith("mp3 "), rows[5].quality
+    assert rows[0].name == "clip", "the title is the name, the rest is quality"
+    assert all(r.kind in TAG_COLOURS for r in rows), "a row with no colour"
     assert rows[5].fmt == "mp3" and rows[5].size == 1000, "mp3 row rides the audio track"
     twitter = rows[3]
     assert twitter.fmt == "http-99" and twitter.size == 3000, "unknown codec = complete file"
-    assert "*" not in twitter.name, "must not demand ffmpeg it does not need"
+    assert "*" not in twitter.quality, "must not demand ffmpeg it does not need"
     # video-only sizes include the audio track that gets merged in
     assert rows[0].size == 91000 and rows[1].size == 41000
     assert rows[1].fmt.startswith("v1080+"), "should keep the higher-bitrate 1080p"
     # progressive row carries no merge, so no ffmpeg needed and no star
     assert rows[2].fmt == "p360" and "+" not in rows[2].fmt
-    assert "*" not in rows[2].name, "a complete file is never flagged"
+    assert "*" not in rows[2].quality, "a complete file is never flagged"
     assert "+" in rows[0].fmt, "2160p must merge a separate audio track"
     # the star tracks ffmpeg, so pin the rule itself rather than this machine
     assert merge_mark(False, False) == " *", "flag a merge row with no ffmpeg"
@@ -2547,12 +2629,27 @@ def ui_selftest():
         app.open_settings()
         dlg = [w for w in root.winfo_children() if isinstance(w, tk.Toplevel)]
         assert len(dlg) == 1, dlg
-        boxes = [w for f in dlg[0].winfo_children()
-                 for w in f.winfo_children() if isinstance(w, ttk.Combobox)]
-        assert len(boxes) == 2, f"language and cookies boxes expected: {boxes}"
+        def walk(w):
+            for child in w.winfo_children():
+                yield child
+                yield from walk(child)
+
+        boxes = [w for w in walk(dlg[0]) if isinstance(w, ttk.Combobox)]
+        assert len(boxes) == 3, f"language, quality and cookies expected: {boxes}"
         for box in boxes:
             assert box.get(), f"dropdown shows nothing selected: {box['values']}"
             assert box.cget("style") == "T.TCombobox"
+
+        # save and cancel are pinned outside the scrolling area, because at
+        # 860px the dialog put them under the bottom of a 768p screen
+        dlg[0].update_idletasks()
+        buttons = [w for w in walk(dlg[0]) if isinstance(w, ttk.Button)]
+        assert buttons, "no buttons in the settings dialog"
+        assert dlg[0].winfo_height() <= int(dlg[0].winfo_screenheight() * 0.85),             f"dialog is {dlg[0].winfo_height()}px tall"
+        for b in buttons:
+            if b.cget("text") in (app.t("save"), app.t("cancel")):
+                bottom = b.winfo_rooty() + b.winfo_height()
+                assert bottom <= dlg[0].winfo_rooty() + dlg[0].winfo_height(),                     f"{b.cget('text')} sits below the dialog"
         dlg[0].grab_release()
         dlg[0].destroy()
 

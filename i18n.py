@@ -28,7 +28,7 @@ STRINGS = {
         "settings": "settings", "log": "log", "copy_log": "copy log", "open": "open",
         "browse": "...", "save": "save", "cancel": "cancel",
         "quality": "quality", "save_to": "save to",
-        "col_type": "TYPE", "col_size": "SIZE", "col_info": "INFO",
+        "col_type": "TYPE", "col_size": "SIZE", "col_info": "INFO", "col_quality": "QUALITY",
         "col_name": "NAME",
         "ready": "ready :: click a row to mark it :: ctrl+a marks all",
         "preview_hint": "select a row\nto preview",
@@ -58,6 +58,9 @@ STRINGS = {
                             "WARNING: this identifies you to the site as your account.",
         "dlg_attempts": "tries per file",
         "dlg_parallel": "downloads at once",
+        "dlg_quality_hint": "Only used for playlists, and for pages that do not\n"
+                            "list their formats. Everywhere else each resolution\n"
+                            "is already a row of its own.",
         "dlg_parallel_hint": "More is faster until your connection is the limit.",
         "dlg_ffmpeg": "ffmpeg", "dlg_ffmpeg_missing": "not installed",
         "dlg_lang_note": "The window reloads when you change language.",
@@ -73,6 +76,10 @@ STRINGS = {
         "save": "αποθήκευση", "cancel": "άκυρο",
         "quality": "ποιότητα", "save_to": "αποθήκευση σε",
         "col_type": "ΤΥΠΟΣ", "col_size": "ΜΕΓΕΘΟΣ", "col_info": "ΣΤΟΙΧΕΙΑ",
+        "col_quality": "ΠΟΙΟΤΗΤΑ",
+        "dlg_quality_hint": "Χρησιμοποιείται μόνο σε playlist, και σε σελίδες\n"
+                            "που δεν δίνουν λίστα φορμά. Παντού αλλού κάθε\n"
+                            "ανάλυση είναι ήδη ξεχωριστή γραμμή.",
         "col_name": "ΟΝΟΜΑ",
         "ready": "έτοιμο :: κλικ σε γραμμή για μαρκάρισμα :: ctrl+a για όλα",
         "preview_hint": "διάλεξε γραμμή\nγια προεπισκόπηση",
@@ -117,6 +124,10 @@ STRINGS = {
         "save": "guardar", "cancel": "cancelar",
         "quality": "calidad", "save_to": "guardar en",
         "col_type": "TIPO", "col_size": "TAMAÑO", "col_info": "DATOS",
+        "col_quality": "CALIDAD",
+        "dlg_quality_hint": "Solo se usa en listas de reproducción y en páginas\n"
+                            "que no listan sus formatos. En el resto cada\n"
+                            "resolución ya es su propia fila.",
         "col_name": "NOMBRE",
         "ready": "listo :: clic en una fila para marcarla :: ctrl+a marca todas",
         "preview_hint": "elige una fila\npara la vista previa",
@@ -161,6 +172,10 @@ STRINGS = {
         "save": "speichern", "cancel": "abbrechen",
         "quality": "qualität", "save_to": "speichern in",
         "col_type": "TYP", "col_size": "GRÖSSE", "col_info": "INFOS",
+        "col_quality": "QUALITÄT",
+        "dlg_quality_hint": "Wird nur für Playlists benutzt und für Seiten, die\n"
+                            "keine Formatliste liefern. Sonst ist jede Auflösung\n"
+                            "bereits eine eigene Zeile.",
         "col_name": "NAME",
         "ready": "bereit :: Zeile anklicken zum Markieren :: ctrl+a markiert alle",
         "preview_hint": "Zeile wählen\nfür Vorschau",

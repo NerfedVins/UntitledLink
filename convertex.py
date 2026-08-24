@@ -1247,7 +1247,7 @@ class App:
             st.configure(f"{accent}.T.TButton", background=C["panel"],
                          foreground=C[accent], font=(self.mono, 10, "bold"),
                          borderwidth=0, relief="flat", padding=(14, 5),
-                         focuscolor=C[accent], anchor="center")
+                         focuscolor=C[accent], anchor="center", width=0)
             st.map(f"{accent}.T.TButton",
                    background=[("pressed", C["line"]), ("active", C["line"])],
                    foreground=[("disabled", C["line"])])
@@ -2347,6 +2347,20 @@ def ui_selftest():
         app.pump()
         rows = app.tree.get_children()
         assert len(rows) == 2, rows
+
+        # ttk's stock TButton has an 11-character minimum width, which made
+        # "scan" as wide as "download" and pushed the rows out of shape.
+        root.deiconify()
+        root.update_idletasks()
+        widths = {b.cget("text"): b.winfo_width()
+                  for b in (app.scan_btn, app.dl_btn) if b.winfo_ismapped()}
+        assert len(set(widths.values())) == len(widths),             f"buttons all one width, style lost width=0: {widths}"
+        for frame in root.winfo_children():
+            for w in frame.winfo_children():
+                if w.winfo_ismapped():
+                    right = frame.winfo_x() + w.winfo_x() + w.winfo_width()
+                    assert right <= root.winfo_width() + 1, f"{w} past the edge"
+        root.withdraw()
 
         # marking used to need a mouse
         app.tree.focus(rows[0])

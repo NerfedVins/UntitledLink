@@ -71,8 +71,8 @@ empty - no encoder signature, no source URL.
 
 ## Marking, preview, log
 
-**Click a row to mark it.** Marked rows show `[x]` and the status line keeps a
-running total - `3 marked :: 412.6M total` - so you can queue two videos and ten
+**Click a row to mark it**, or move to it with the arrow keys and press Space.
+Marked rows show `[x]` and the status line keeps a running total - `3 marked :: 412.6M total` - so you can queue two videos and ten
 photos in one go and see what it costs before starting. Download takes the marked
 rows; with nothing marked it takes everything. Ctrl+A marks all, Ctrl+A again
 clears.
@@ -89,6 +89,11 @@ never leaves you guessing. `log` toggles it, `copy log` puts the whole thing on
 the clipboard. It lives in memory only and is not written to disk.
 
 ## Keyboard
+
+**Tab moves between the buttons**, Space or Return presses the focused one, and
+Space on a row in the list marks it. Nothing needs a mouse. The buttons are real
+controls rather than styled labels, so a screen reader announces them as buttons
+and a disabled one drops out of the tab order instead of merely going grey.
 
 Ctrl+V / Ctrl+C / Ctrl+X / Ctrl+A are wired to **physical key codes**, not to the
 letters Tk sees. Tk's built-in bindings match the keysym, so on a Greek (or any
@@ -180,6 +185,10 @@ Each item gets **3 tries** with 1s / 2s backoff, and every retry resumes rather
 than restarting. yt-dlp resumes its own fragments the same way. Failures that
 retrying cannot fix - a resolution needing ffmpeg you do not have - are reported
 immediately instead of burning attempts.
+
+Once an item has run out of tries its `.part` is deleted: nothing is ever going to
+finish it, and a download folder slowly filling with dead partials is its own
+problem. A `.part` left by **cancelling** is kept, because that one still resumes.
 
 ## Settings
 

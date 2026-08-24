@@ -22,7 +22,6 @@ COOKIE_BROWSERS = [NO_COOKIES, "chrome", "firefox", "edge", "brave",
 
 STRINGS = {
     "en": {
-        "tagline": "paste a link, take what you want",
         "scan": "scan", "clear": "clear", "refresh": "refresh",
         "download": "download", "stop": "stop",
         "settings": "settings", "log": "log", "copy_log": "copy log", "open": "open",
@@ -30,6 +29,11 @@ STRINGS = {
         "quality": "quality", "save_to": "save to",
         "col_type": "TYPE", "col_size": "SIZE", "col_info": "INFO",
         "col_quality": "QUALITY", "col_length": "LENGTH",
+        "source": "source",
+        "dlg_dblclick": "double click a row to download it",
+        "dlg_dblclick_hint": "Off by default. The first click of the pair has\n"
+                             "already marked the row, so an accidental double\n"
+                             "click would start a download you did not ask for.",
         # What a row is. Format names - mp4, vp9, avc1, fps, kHz - are not
         # translated anywhere: they are what the format is called, not words.
         "kind_video": "video", "kind_audio": "audio", "kind_image": "image",
@@ -74,7 +78,6 @@ STRINGS = {
         "try_cookies": "If it needs a login, turn on browser cookies in settings.",
     },
     "el": {
-        "tagline": "βάλε ένα λινκ, πάρε ό,τι θέλεις",
         "scan": "σάρωση", "clear": "καθαρισμός", "refresh": "ανανέωση",
         "download": "λήψη",
         "stop": "διακοπή", "settings": "ρυθμίσεις", "log": "αρχείο",
@@ -83,6 +86,11 @@ STRINGS = {
         "quality": "ποιότητα", "save_to": "αποθήκευση σε",
         "col_type": "ΤΥΠΟΣ", "col_size": "ΜΕΓΕΘΟΣ", "col_info": "ΣΤΟΙΧΕΙΑ",
         "col_quality": "ΠΟΙΟΤΗΤΑ", "col_length": "ΔΙΑΡΚΕΙΑ",
+        "source": "πηγή",
+        "dlg_dblclick": "διπλό κλικ σε γραμμή για λήψη",
+        "dlg_dblclick_hint": "Ανενεργό εξ ορισμού. Το πρώτο κλικ έχει ήδη\n"
+                             "μαρκάρει τη γραμμή, οπότε ένα κατά λάθος διπλό\n"
+                             "κλικ θα ξεκινούσε λήψη που δεν ζήτησες.",
         "kind_video": "βίντεο", "kind_audio": "ήχος", "kind_image": "εικόνα",
         "kind_doc": "έγγραφο", "kind_archive": "αρχειοθήκη", "kind_file": "αρχείο",
         "q_as_set": "ό,τι ορίστηκε", "q_original": "πρωτότυπο", "q_audio": "ήχος",
@@ -125,7 +133,6 @@ STRINGS = {
         "try_cookies": "Αν θέλει σύνδεση, ενεργοποίησε τα cookies στις ρυθμίσεις.",
     },
     "es": {
-        "tagline": "pega un enlace, toma lo que quieras",
         "scan": "escanear", "clear": "limpiar", "refresh": "recargar",
         "download": "descargar",
         "stop": "parar", "settings": "ajustes", "log": "registro",
@@ -134,6 +141,11 @@ STRINGS = {
         "quality": "calidad", "save_to": "guardar en",
         "col_type": "TIPO", "col_size": "TAMAÑO", "col_info": "DATOS",
         "col_quality": "CALIDAD", "col_length": "DURACIÓN",
+        "source": "fuente",
+        "dlg_dblclick": "doble clic en una fila para descargarla",
+        "dlg_dblclick_hint": "Desactivado por defecto. El primer clic ya marca\n"
+                             "la fila, así que un doble clic accidental\n"
+                             "iniciaría una descarga que no pediste.",
         "kind_video": "vídeo", "kind_audio": "audio", "kind_image": "imagen",
         "kind_doc": "documento", "kind_archive": "archivo comprimido",
         "kind_file": "archivo",
@@ -177,7 +189,6 @@ STRINGS = {
         "try_cookies": "Si requiere login, activa las cookies del navegador en ajustes.",
     },
     "de": {
-        "tagline": "Link einfügen, nehmen was du willst",
         "scan": "scannen", "clear": "leeren", "refresh": "neu laden",
         "download": "laden",
         "stop": "stopp", "settings": "einstellungen", "log": "protokoll",
@@ -186,6 +197,11 @@ STRINGS = {
         "quality": "qualität", "save_to": "speichern in",
         "col_type": "TYP", "col_size": "GRÖSSE", "col_info": "INFOS",
         "col_quality": "QUALITÄT", "col_length": "DAUER",
+        "source": "Quelle",
+        "dlg_dblclick": "Doppelklick auf eine Zeile lädt sie herunter",
+        "dlg_dblclick_hint": "Standardmäßig aus. Der erste Klick markiert die\n"
+                             "Zeile bereits, ein versehentlicher Doppelklick\n"
+                             "würde also einen Download starten.",
         "kind_video": "Video", "kind_audio": "Audio", "kind_image": "Bild",
         "kind_doc": "Dokument", "kind_archive": "Archiv", "kind_file": "Datei",
         "q_as_set": "wie eingestellt", "q_original": "Original", "q_audio": "Audio",

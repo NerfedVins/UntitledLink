@@ -353,8 +353,19 @@ height anyway.
 INFO line, next to the dimensions and the codec, with nothing saying what it
 was.
 
+Everything in the table is centred, heading and cell alike, and INFO stretches
+alongside NAME so the columns reach the right-hand edge whichever of them is
+showing.
+
 **NAME folds away when every row has the same one.** One video hands back a row
 per resolution, all sharing a title, and on a maximised window that repeated
 title had more space than anything else on screen. The title is shown once
 above the list instead. A scraped page, where the names are what tell the rows
 apart, keeps the column.
+
+## Double click
+
+Off by default. Turn it on in settings and a double click downloads the row
+under the pointer. The reason it is not on to begin with: the first click of
+the pair has already marked or unmarked that row, so a double click landing by
+accident would queue something you never asked for.

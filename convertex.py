@@ -1264,6 +1264,10 @@ class App:
         self.clean_var = tk.BooleanVar(value=self.prefs.get("strip_metadata", True))
         self.cookies_var = tk.StringVar(
             value=self.prefs.get("cookies") or NO_COOKIES)
+        # Off by default: a double click is easy to do by accident, and the
+        # accident here starts a download rather than opening something.
+        self.dblclick_var = tk.BooleanVar(
+            value=bool(self.prefs.get("double_click_downloads", False)))
         self.quality_var = tk.StringVar(value=self.prefs.get("quality", "best"))
         # StringVar, not IntVar: an IntVar raises TclError the moment it holds
         # anything non-numeric, and both a hand-edited settings file and the
@@ -1304,6 +1308,7 @@ class App:
             "quality": self.quality_var.get(),
             "strip_metadata": bool(self.clean_var.get()),
             "cookies": self.cookies(),
+            "double_click_downloads": bool(self.dblclick_var.get()),
             "attempts": self.attempts(),
             "parallel": self.workers(),
         })
@@ -1480,8 +1485,6 @@ class App:
         head = tk.Frame(self.root, bg=C["bg"])
         head.pack(fill="x", pady=(14, 2), **pad)
         tk.Label(head, text=APP, bg=C["bg"], fg=C["green"], font=self.fh).pack(side="left")
-        tk.Label(head, text=f"  v{VERSION}  ::  {self.t('tagline')}",
-                 bg=C["bg"], fg=C["dim"], font=self.f).pack(side="left", pady=(5, 0))
         # Settings sits top right, out of the way of the things you touch on
         # every run. The hint beside it is the one thing worth seeing without
         # opening the dialog: what is currently switched on.
@@ -1495,8 +1498,8 @@ class App:
 
         row = tk.Frame(self.root, bg=C["bg"])
         row.pack(fill="x", **pad)
-        tk.Label(row, text=">", bg=C["bg"], fg=C["green"],
-                 font=self.fb).pack(side="left", padx=(0, 8))
+        tk.Label(row, text=self.t("source"), bg=C["bg"], fg=C["green"],
+                 font=self.fb).pack(side="left", padx=(0, 10))
         self.url = self.entry(row, textvariable=self.url_var)
         self.url.pack(side="left", fill="x", expand=True, ipady=5)
         self.url.bind("<Return>", lambda _e: self.do_scan())
@@ -1550,17 +1553,20 @@ class App:
         self.tree.heading("#0", text="")
         self.tree.column("#0", width=38, minwidth=38, stretch=False,
                          anchor="center")
-        for col, txt, w, anchor in (("kind", self.t("col_type"), 78, "w"),
-                                    ("quality", self.t("col_quality"), 108, "w"),
-                                    ("length", self.t("col_length"), 62, "e"),
-                                    ("size", self.t("col_size"), 66, "e"),
-                                    ("info", self.t("col_info"), 230, "w"),
-                                    ("name", self.t("col_name"), 280, "w")):
-            # A heading takes its own anchor, and the default is centre - which
-            # is why every title floated over the middle of a column whose
-            # contents were pushed to one edge.
-            self.tree.heading(col, text=txt, anchor=anchor)
-            self.tree.column(col, width=w, anchor=anchor, stretch=(col == "name"))
+        # Everything is centred, heading and cell alike, so a column reads as
+        # one block instead of contents hugging one edge under a title hugging
+        # the other. INFO and NAME both stretch: NAME folds away for a single
+        # video, and without a second stretching column the table would stop
+        # short and leave dead space to the right of it.
+        for col, txt, w in (("kind", self.t("col_type"), 90),
+                            ("quality", self.t("col_quality"), 120),
+                            ("length", self.t("col_length"), 80),
+                            ("size", self.t("col_size"), 80),
+                            ("info", self.t("col_info"), 250),
+                            ("name", self.t("col_name"), 260)):
+            self.tree.heading(col, text=txt, anchor="center")
+            self.tree.column(col, width=w, anchor="center", minwidth=56,
+                             stretch=(col in ("info", "name")))
         sb = ttk.Scrollbar(self.table, orient="vertical", command=self.tree.yview,
                            style="T.Vertical.TScrollbar")
         self.tree.configure(yscrollcommand=sb.set)
@@ -1571,7 +1577,7 @@ class App:
         self.tree.tag_configure("marked", background=C["line"])
         self.tree.bind("<Button-1>", self.on_row_click)
         self.tree.bind("<<TreeviewSelect>>", lambda _e: self.show_preview())
-        self.tree.bind("<Double-1>", lambda _e: self.do_download())
+        self.tree.bind("<Double-1>", self.on_double_click)
         # Marking was mouse-only: arrow keys moved the selection but there was
         # no way to actually mark a row without clicking it.
         self.tree.bind("<space>", self.on_row_key)
@@ -1651,6 +1657,17 @@ class App:
         else:
             self.toggle_mark(row)
         self.tree.selection_set(row)  # keep the preview in step
+        return "break"
+
+    def on_double_click(self, _event):
+        """Start the download, if the user asked for that to be a thing.
+
+        Off unless switched on: the first click of the pair has already marked
+        or unmarked the row, so a stray double click would queue whatever was
+        under the pointer.
+        """
+        if self.dblclick_var.get():
+            self.do_download()
         return "break"
 
     def on_row_key(self, _event):
@@ -2003,6 +2020,14 @@ class App:
                        highlightthickness=0, borderwidth=0,
                        cursor="hand2", anchor="w").pack(fill="x", padx=20)
         hint(self.t("dlg_strip_hint"))
+
+        head(self.t("dlg_dblclick"))
+        tk.Checkbutton(body, text=self.t("dlg_dblclick"), variable=self.dblclick_var,
+                       bg=C["bg"], fg=C["fg"], font=self.f, selectcolor=C["panel"],
+                       activebackground=C["bg"], activeforeground=C["green"],
+                       highlightthickness=0, borderwidth=0,
+                       cursor="hand2", anchor="w").pack(fill="x", padx=20)
+        hint(self.t("dlg_dblclick_hint"))
 
         head(self.t("dlg_parallel"))
         tk.Spinbox(body, from_=1, to=MAX_PARALLEL, width=5,
@@ -2636,6 +2661,11 @@ def ui_selftest():
 
         # Buttons must be controls, not Labels wearing a click handler: only a
         # real one takes Tab focus and announces itself to a screen reader.
+        def walk(w):
+            for child in w.winfo_children():
+                yield child
+                yield from walk(child)
+
         gated = [app.scan_btn, app.dl_btn, app.refresh_btn]
         for b in gated + [app.stop_btn]:
             assert isinstance(b, ttk.Button), type(b)
@@ -2703,11 +2733,6 @@ def ui_selftest():
         app.open_settings()
         dlg = [w for w in root.winfo_children() if isinstance(w, tk.Toplevel)]
         assert len(dlg) == 1, dlg
-        def walk(w):
-            for child in w.winfo_children():
-                yield child
-                yield from walk(child)
-
         boxes = [w for w in walk(dlg[0]) if isinstance(w, ttk.Combobox)]
         assert len(boxes) == 3, f"language, quality and cookies expected: {boxes}"
         for box in boxes:
@@ -2741,10 +2766,41 @@ def ui_selftest():
         assert not int(app.outdir.pack_info()["expand"]),             "the download path is taking the whole row again"
         assert int(app.url.pack_info()["expand"]), "the URL box should still grow"
 
-        # a heading defaults to centre while its column may be left or right
-        # aligned, which had every title floating over the wrong place
+        # heading and cell are centred together, so a column reads as one block
         for col in app.tree.cget("columns"):
-            assert str(app.tree.heading(col)["anchor"]) ==                    str(app.tree.column(col)["anchor"]), f"{col} heading adrift"
+            assert str(app.tree.column(col)["anchor"]) == "center", col
+            assert str(app.tree.heading(col)["anchor"]) == "center", col
+
+        # double click only downloads when asked; the first click of the pair
+        # has already marked the row, so the default is off
+        assert not app.dblclick_var.get(), "double click must be opt-in"
+        started = []
+        real_download, app.do_download = app.do_download, lambda: started.append(1)
+        app.on_double_click(None)
+        assert not started, "double click downloaded with the setting off"
+        app.dblclick_var.set(True)
+        app.on_double_click(None)
+        assert len(started) == 1, "double click did nothing with the setting on"
+        app.dblclick_var.set(False)
+        app.do_download = real_download
+
+        # the header is the app name and nothing else now
+        head_text = " ".join(
+            w.cget("text") for w in walk(root)
+            if isinstance(w, tk.Label) and w.winfo_manager() == "pack"
+            and VERSION in str(w.cget("text")))
+        assert not head_text, f"version still on show: {head_text!r}"
+        assert any(w.cget("text") == app.t("source") for w in walk(root)
+                   if isinstance(w, tk.Label)), "no word beside the link box"
+
+        # the columns have to reach the right-hand edge whether NAME is showing
+        # or folded away - only NAME used to stretch, so hiding it left the
+        # table stopping short with dead space beside it
+        def trailing_gap():
+            root.update_idletasks()
+            first = app.tree.get_children()[0]
+            box = app.tree.bbox(first, app.tree.cget("displaycolumns")[-1])
+            return app.tree.winfo_width() - (box[0] + box[2]) if box else 0
 
         # one video means one title on every row, so it is said once above the
         # list and the NAME column folds away
@@ -2764,6 +2820,12 @@ def ui_selftest():
         root.update()
         assert app.source_line.winfo_manager() == "", "source line outstayed its rows"
         assert "name" in app.tree.cget("displaycolumns"), "NAME must return"
+        root.deiconify()
+        assert trailing_gap() < 30, f"dead space with NAME shown: {trailing_gap()}px"
+        app.q.put(("items", same, None))
+        app.pump()
+        assert trailing_gap() < 30, f"dead space with NAME folded: {trailing_gap()}px"
+        root.withdraw()
 
         # categories are words in the user's language; format names are not
         for code in LANGUAGES:

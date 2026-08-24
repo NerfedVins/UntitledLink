@@ -159,6 +159,10 @@ def _data_dir() -> str:
 
 
 DATA_DIR = _data_dir()
+# Set from the settings dialog. A module-level flag because the crash handler
+# runs outside the App and still has to know not to write a file.
+PRIVATE = False
+
 SETTINGS_FILE = os.path.join(DATA_DIR, "settings.json")
 DEFAULT_OUTDIR = os.path.join(os.path.expanduser("~"), "Downloads", APP)
 
@@ -1398,6 +1402,11 @@ class App:
         # accident here starts a download rather than opening something.
         self.dblclick_var = tk.BooleanVar(
             value=bool(self.prefs.get("double_click_downloads", False)))
+        # Deliberately not remembered. A privacy mode you get by accident,
+        # because it was on last week, is not one you can reason about - and
+        # remembering it would mean writing the very file it suppresses.
+        self.private_var = tk.BooleanVar(value=False)
+        self.private_var.trace_add("write", lambda *_: self.apply_private())
         self.quality_var = tk.StringVar(value=self.prefs.get("quality", "best"))
         # StringVar, not IntVar: an IntVar raises TclError the moment it holds
         # anything non-numeric, and both a hand-edited settings file and the
@@ -1430,7 +1439,14 @@ class App:
         self.root.after_cancel(self.tick)  # otherwise pump fires post-destroy
         self.root.destroy()
 
+    def apply_private(self):
+        global PRIVATE
+        PRIVATE = bool(self.private_var.get())
+        self.refresh_hint()
+
     def remember(self):
+        if self.private_var.get():
+            return          # nothing about this session goes to disk
         save_settings({
             "language": self.t.lang,
             "outdir": self.outdir_var.get().strip(),
@@ -1455,6 +1471,8 @@ class App:
         The dropdown shows a word for the off position so the box is never
         blank; everything downstream still wants an empty string.
         """
+        if self.private_var.get():
+            return ""       # private mode never touches the browser's cookies
         chosen = self.cookies_var.get()
         return "" if chosen == NO_COOKIES else chosen
 
@@ -2057,6 +2075,12 @@ class App:
     def refresh_hint(self):
         """One line in the main bar showing what settings are actually on."""
         bits = []
+        if self.private_var.get():
+            # Worth saying plainly: private mode keeps this machine clean, it
+            # does not hide the download from the other end. Only a proxy does
+            # anything about the address the site sees.
+            bits.append("private" if self.proxy_var.get().strip()
+                        else "private (no proxy - your IP still shows)")
         if self.proxy_var.get().strip():
             bits.append("proxy")
         if self.cookies():
@@ -2163,6 +2187,14 @@ class App:
                        highlightthickness=0, borderwidth=0,
                        cursor="hand2", anchor="w").pack(fill="x", padx=20)
         hint(self.t("dlg_strip_hint"))
+
+        head(self.t("dlg_private"))
+        tk.Checkbutton(body, text=self.t("dlg_private"), variable=self.private_var,
+                       bg=C["bg"], fg=C["fg"], font=self.f, selectcolor=C["panel"],
+                       activebackground=C["bg"], activeforeground=C["green"],
+                       highlightthickness=0, borderwidth=0,
+                       cursor="hand2", anchor="w").pack(fill="x", padx=20)
+        hint(self.t("dlg_private_hint"))
 
         head(self.t("dlg_dblclick"))
         tk.Checkbutton(body, text=self.t("dlg_dblclick"), variable=self.dblclick_var,
@@ -2966,6 +2998,37 @@ def ui_selftest():
             assert str(app.tree.column(col)["anchor"]) == "center", col
             assert str(app.tree.heading(col)["anchor"]) == "center", col
 
+        # Private mode: nothing about the session reaches the disk, and no
+        # site is told which account is asking.
+        # SETTINGS_FILE already points at a temp copy for this whole function
+        probe = SETTINGS_FILE
+        if os.path.exists(probe):
+            os.remove(probe)
+        app.cookies_var.set("firefox")
+        assert app.cookies() == "firefox", "cookies should work normally"
+        app.remember()
+        assert os.path.exists(probe), "settings should normally be written"
+        os.remove(probe)
+
+        app.private_var.set(True)
+        assert PRIVATE, "the module flag the crash handler reads did not follow"
+        assert app.cookies() == "", "private mode still handed over cookies"
+        app.remember()
+        assert not os.path.exists(probe), "private mode wrote a settings file"
+        hint_now = app.settings_hint.cget("text")
+        assert "private" in hint_now, hint_now
+        # and it says so when there is no proxy, because that is the half it
+        # cannot do anything about
+        assert "no proxy" in hint_now, hint_now
+        app.proxy_var.set("socks5://127.0.0.1:9050")
+        app.refresh_hint()
+        assert "no proxy" not in app.settings_hint.cget("text")
+
+        app.private_var.set(False)
+        app.proxy_var.set("")
+        app.cookies_var.set(NO_COOKIES)
+        assert not PRIVATE
+
         # Clicking a row shows it; only the checkbox queues it. The two used
         # to be the same action, so you could not look without queueing.
         # Real coordinates rather than a stubbed identify(): the whole point is
@@ -3172,6 +3235,8 @@ def main():
         # window, no clue. Leave a file and say so on screen.
         report = traceback.format_exc()
         try:
+            if PRIVATE:
+                raise OSError("private mode: no crash file")
             with open(os.path.join(DATA_DIR, "crash.log"), "a",
                       encoding="utf-8") as fh:
                 stamp = time.strftime("%Y-%m-%d %H:%M:%S")

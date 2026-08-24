@@ -30,6 +30,13 @@ STRINGS = {
         "col_type": "TYPE", "col_size": "SIZE", "col_info": "INFO",
         "col_quality": "QUALITY", "col_length": "LENGTH", "col_res": "RESOLUTION",
         "source": "source",
+        "dlg_private": "private session",
+        "dlg_private_hint": "Leaves nothing on this computer: no settings file,\n"
+                            "no crash file, and browser cookies stay untouched\n"
+                            "so no site is told which account you are.\n"
+                            "It does NOT hide the download from the site. Your\n"
+                            "address is in their logs either way - only a proxy\n"
+                            "changes that. Not remembered; switch it on each time.",
         "dlg_dblclick": "double click a row to download it",
         "dlg_dblclick_hint": "Off by default. The first click of the pair has\n"
                              "already marked the row, so an accidental double\n"
@@ -87,6 +94,13 @@ STRINGS = {
         "col_type": "ΤΥΠΟΣ", "col_size": "ΜΕΓΕΘΟΣ", "col_info": "ΣΤΟΙΧΕΙΑ",
         "col_quality": "ΠΟΙΟΤΗΤΑ", "col_length": "ΔΙΑΡΚΕΙΑ", "col_res": "ΑΝΑΛΥΣΗ",
         "source": "πηγή",
+        "dlg_private": "ιδιωτική συνεδρία",
+        "dlg_private_hint": "Δεν αφήνει τίποτα σε αυτόν τον υπολογιστή: ούτε αρχείο\n"
+                            "ρυθμίσεων, ούτε crash, και δεν αγγίζει τα cookies του\n"
+                            "browser - κανένα site δεν μαθαίνει ποιος λογαριασμός είσαι.\n"
+                            "ΔΕΝ κρύβει τη λήψη από το site. Η διεύθυνσή σου είναι στα\n"
+                            "logs του έτσι κι αλλιώς - μόνο ένα proxy το αλλάζει αυτό.\n"
+                            "Δεν απομνημονεύεται· ενεργοποίησέ το κάθε φορά.",
         "dlg_dblclick": "διπλό κλικ σε γραμμή για λήψη",
         "dlg_dblclick_hint": "Ανενεργό εξ ορισμού. Το πρώτο κλικ έχει ήδη\n"
                              "μαρκάρει τη γραμμή, οπότε ένα κατά λάθος διπλό\n"
@@ -142,6 +156,12 @@ STRINGS = {
         "col_type": "TIPO", "col_size": "TAMAÑO", "col_info": "DATOS",
         "col_quality": "CALIDAD", "col_length": "DURACIÓN", "col_res": "RESOLUCIÓN",
         "source": "fuente",
+        "dlg_private": "sesión privada",
+        "dlg_private_hint": "No deja nada en este ordenador: ni archivo de ajustes,\n"
+                            "ni archivo de fallos, y no toca las cookies del navegador.\n"
+                            "NO oculta la descarga del sitio: tu dirección queda en sus\n"
+                            "registros igualmente, solo un proxy cambia eso.\n"
+                            "No se recuerda; actívala cada vez.",
         "dlg_dblclick": "doble clic en una fila para descargarla",
         "dlg_dblclick_hint": "Desactivado por defecto. El primer clic ya marca\n"
                              "la fila, así que un doble clic accidental\n"
@@ -198,6 +218,12 @@ STRINGS = {
         "col_type": "TYP", "col_size": "GRÖSSE", "col_info": "INFOS",
         "col_quality": "QUALITÄT", "col_length": "DAUER", "col_res": "AUFLÖSUNG",
         "source": "Quelle",
+        "dlg_private": "private Sitzung",
+        "dlg_private_hint": "Hinterlässt nichts auf diesem Rechner: keine Einstellungs-\n"
+                            "datei, keine Absturzdatei, und die Browser-Cookies bleiben\n"
+                            "unberührt. Verbirgt den Download NICHT vor der Seite - deine\n"
+                            "Adresse steht so oder so in deren Logs, das ändert nur ein\n"
+                            "Proxy. Wird nicht gemerkt; jedes Mal neu einschalten.",
         "dlg_dblclick": "Doppelklick auf eine Zeile lädt sie herunter",
         "dlg_dblclick_hint": "Standardmäßig aus. Der erste Klick markiert die\n"
                              "Zeile bereits, ein versehentlicher Doppelklick\n"

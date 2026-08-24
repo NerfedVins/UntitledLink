@@ -389,3 +389,29 @@ variant tried, including lazy-loaded `data-src` and protocol-relative ones.
 Choosing which iframes are worth following is left to yt-dlp rather than to a
 list of video hosts kept here, which drops the tracking pixels and the social
 buttons for free - nothing has an extractor for those.
+
+## Private session
+
+A switch in settings. What it does:
+
+- **No settings file.** Nothing about the session is written while it is on.
+- **No crash file.** A crash still shows its dialog, it just leaves no file.
+- **Cookies stay untouched**, whatever the cookie dropdown says. That is the
+  one that matters: handing over your browser cookies tells the site which
+  account is asking, by name.
+- Deliberately **not remembered**. A privacy mode you get by accident because
+  it was on last week is not one you can reason about - and remembering it
+  would mean writing the very file it exists to suppress.
+
+What it does **not** do, and the hint line says so when no proxy is set: it
+does not hide the download from the site. Your address is in their logs either
+way. Only a proxy changes that, and the two are separate switches on purpose.
+
+## The exe
+
+`build.bat` produces a single ~87MB `convertex.exe` with Python, yt-dlp, ffmpeg
+and the certificates inside it. Verified by copying it to an empty folder with
+no ffmpeg on PATH and running its self-test: it passes, which includes finding
+its own ffmpeg. Nothing needs installing on the machine that runs it.
+
+ffprobe is not bundled. Nothing here calls it, and it is another 100MB.

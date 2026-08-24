@@ -2458,6 +2458,20 @@ def ui_selftest():
             assert ttk.Style().lookup("T.TCombobox", "fieldbackground",
                                       state) == C["panel"], state
 
+        # the settings dialog is where the unreadable dropdowns showed up, so
+        # build it for real and check what a reader would actually see
+        app.open_settings()
+        dlg = [w for w in root.winfo_children() if isinstance(w, tk.Toplevel)]
+        assert len(dlg) == 1, dlg
+        boxes = [w for f in dlg[0].winfo_children()
+                 for w in f.winfo_children() if isinstance(w, ttk.Combobox)]
+        assert len(boxes) == 2, f"language and cookies boxes expected: {boxes}"
+        for box in boxes:
+            assert box.get(), f"dropdown shows nothing selected: {box['values']}"
+            assert box.cget("style") == "T.TCombobox"
+        dlg[0].grab_release()
+        dlg[0].destroy()
+
         # every language change used to leave another pump loop running
         pending = len(root.tk.call("after", "info"))
         for code in LANGUAGES:

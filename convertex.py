@@ -73,6 +73,8 @@ STATUS_CHARS = 54
 PREVIEW_W = 240            # preview pane width in pixels
 IMAGE_HEADER_BYTES = 65536  # enough for any JPEG/PNG/WebP size header
 PREVIEW_MAX_BYTES = 8 << 20
+MAX_THUMB_CACHE = 60       # decoded previews kept before the cache is dropped
+MAX_HTML_BYTES = 8 << 20   # a page bigger than this is not a page worth parsing
 
 # Fallback quality picker, used for playlist entries where per-format sizes are
 # not known up front. (selector with ffmpeg, selector without it)
@@ -147,8 +149,10 @@ def _data_dir() -> str:
 DATA_DIR = _data_dir()
 BIN_DIR = os.path.join(DATA_DIR, "bin")
 
-# Official static Windows build. Only ever fetched when the user clicks the
-# "get ffmpeg" button - nothing downloads a binary on its own.
+# Official static Windows build, fetched once when ffmpeg is nowhere to be
+# found: on first launch in the background, or on demand from the "get ffmpeg"
+# button. Both paths say so in the log; only the button asks first, because by
+# the time you are clicking it you already know what you want.
 FFMPEG_ZIP = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
 
 
@@ -163,6 +167,17 @@ def load_settings() -> dict:
             return json.load(fh)
     except (OSError, ValueError):
         return {}
+
+
+def clamp_int(text, default: int, lo: int, hi: int) -> int:
+    """A usable int out of a settings file or a Spinbox, both of which can hold
+    anything the user typed. Out-of-range is pulled back to the nearest end -
+    a hand-edited "parallel": 99 means "lots", not "crash".
+    """
+    try:
+        return max(lo, min(hi, int(text)))
+    except (TypeError, ValueError):
+        return default
 
 
 def save_settings(data: dict) -> None:
@@ -428,11 +443,20 @@ def best_from_srcset(srcset: str, base: str) -> str | None:
     return best
 
 
+# CON, NUL, COM1 and friends are devices, not files, on every Windows there
+# has ever been - opening one succeeds and writes nowhere, or fails with an
+# error that says nothing about the name. The extension does not save you:
+# "nul.jpg" is still the device.
+RESERVED = re.compile(r"^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(\.|$)", re.I)
+
+
 def safe_name(text: str, limit: int = 120) -> str:
     """A filename Windows will actually accept. Trailing dots and spaces too -
     NTFS silently drops those and the rename then hits the wrong path."""
     cleaned = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", text).strip()
     cleaned = cleaned[:limit].rstrip(". ")
+    if RESERVED.match(cleaned):
+        cleaned = "_" + cleaned
     return cleaned or "file"
 
 
@@ -533,7 +557,10 @@ def probe_all(items: list[Item], s: requests.Session) -> list[Item]:
                     it.url, it.size = cand, size
         return it
 
-    with ThreadPoolExecutor(max_workers=12) as pool:
+    # Most scrapes are one host, so the worker count is the per-host cap in
+    # practice. Twelve HEADs at once is what trips the rate limiter HOST_LIMIT
+    # exists to stay under; six probes fast enough.
+    with ThreadPoolExecutor(max_workers=6) as pool:
         probed = [it for it in pool.map(probe, items) if it]
     # two thumbnails can resolve to the same original, so dedupe after upgrading
     return list({it.url: it for it in probed}.values())
@@ -541,13 +568,17 @@ def probe_all(items: list[Item], s: requests.Session) -> list[Item]:
 
 def scrape_page(url: str, proxy: str | None, log) -> list[Item]:
     s = session_for(proxy)
-    r = s.get(url, timeout=25)
+    # streamed so the body can be read in a bounded slice below
+    r = s.get(url, timeout=25, stream=True)
     r.raise_for_status()
     if "html" not in r.headers.get("content-type", ""):
         size = int(r.headers.get("content-length") or 0)
         return [Item(url, name_from_url(url), kind_of(url) or "file", size)]
 
-    soup = BeautifulSoup(r.text, "html.parser")
+    # Bounded read: BeautifulSoup sniffs the encoding out of the bytes itself,
+    # and r.text would happily pull a runaway response into memory first.
+    soup = BeautifulSoup(r.raw.read(MAX_HTML_BYTES, decode_content=True),
+                         "html.parser")
     found: dict[str, str] = {}
 
     def add(raw):
@@ -717,7 +748,14 @@ def tweet_id(url: str) -> str | None:
 
 
 def _syndication_token(tweet: str) -> str:
-    """The token the embed endpoint expects: fractional part of id/1e15 * pi."""
+    """A token for the embed endpoint.
+
+    Twitter's own script prints ((id / 1e15) * pi) in base 36 with zeros and
+    the dot stripped. This is the decimal fraction instead, which is not the
+    same string - and does not need to be: the endpoint accepts any non-empty
+    token and only rejects a missing one. If that ever changes, base 36 is the
+    thing to implement.
+    """
     return ("%f" % ((int(tweet) / 1e15) * math.pi)).split(".")[-1]
 
 
@@ -922,6 +960,19 @@ def part_path(outdir: str, name: str, url: str) -> str:
     return os.path.join(outdir, f"{name}.{tag}.part")
 
 
+def drop_part(it, outdir: str) -> None:
+    """Bin a resume file that nothing is ever going to finish.
+
+    Kept after a cancel on purpose - the whole point of keying .part by URL is
+    that pulling an item out of the queue and asking for it again later picks
+    up where it stopped. Only a failure retrying cannot fix is litter.
+    """
+    try:
+        os.remove(part_path(outdir, it.name, it.url))
+    except OSError:
+        pass
+
+
 def unique_path(path: str) -> str:
     if not os.path.exists(path):
         return path
@@ -1120,8 +1171,13 @@ class App:
         self.clean_var = tk.BooleanVar(value=self.prefs.get("strip_metadata", True))
         self.cookies_var = tk.StringVar(value=self.prefs.get("cookies", ""))
         self.quality_var = tk.StringVar(value=self.prefs.get("quality", "best"))
-        self.attempts_var = tk.IntVar(value=self.prefs.get("attempts", ATTEMPTS))
-        self.parallel_var = tk.IntVar(value=self.prefs.get("parallel", PARALLEL))
+        # StringVar, not IntVar: an IntVar raises TclError the moment it holds
+        # anything non-numeric, and both a hand-edited settings file and the
+        # Spinbox itself can put junk in there. Coerced on read instead.
+        self.attempts_var = tk.StringVar(
+            value=str(clamp_int(self.prefs.get("attempts"), ATTEMPTS, 1, 10)))
+        self.parallel_var = tk.StringVar(
+            value=str(clamp_int(self.prefs.get("parallel"), PARALLEL, 1, MAX_PARALLEL)))
         self.lang_var = tk.StringVar(value=self.t.lang)
 
         self.mono = self.pick_font()
@@ -1153,9 +1209,15 @@ class App:
             "quality": self.quality_var.get(),
             "strip_metadata": bool(self.clean_var.get()),
             "cookies": self.cookies_var.get(),
-            "attempts": int(self.attempts_var.get()),
-            "parallel": int(self.parallel_var.get()),
+            "attempts": self.attempts(),
+            "parallel": self.workers(),
         })
+
+    def attempts(self) -> int:
+        return clamp_int(self.attempts_var.get(), ATTEMPTS, 1, 10)
+
+    def workers(self) -> int:
+        return clamp_int(self.parallel_var.get(), PARALLEL, 1, MAX_PARALLEL)
 
     def pick_font(self) -> str:
         fams = set(tkfont.families(self.root))
@@ -1181,6 +1243,14 @@ class App:
         st.configure("T.Horizontal.TProgressbar", background=C["green"],
                      troughcolor=C["panel"], bordercolor=C["panel"],
                      lightcolor=C["green"], darkcolor=C["green"], borderwidth=0)
+        for accent in ("green", "cyan", "amber", "red", "dim"):
+            st.configure(f"{accent}.T.TButton", background=C["panel"],
+                         foreground=C[accent], font=(self.mono, 10, "bold"),
+                         borderwidth=0, relief="flat", padding=(14, 5),
+                         focuscolor=C[accent], anchor="center")
+            st.map(f"{accent}.T.TButton",
+                   background=[("pressed", C["line"]), ("active", C["line"])],
+                   foreground=[("disabled", C["line"])])
         st.configure("T.TCombobox", fieldbackground=C["panel"], background=C["panel"],
                      foreground=C["fg"], arrowcolor=C["dim"], bordercolor=C["line"],
                      selectbackground=C["panel"], selectforeground=C["fg"])
@@ -1200,14 +1270,15 @@ class App:
                      highlightcolor=C["green"], selectbackground=C["line"])
         return self.wire_entry(e)
 
-    def button(self, parent, text, cmd, accent=None):
-        accent = accent or C["green"]
-        b = tk.Label(parent, text=text, bg=C["panel"], fg=accent, font=self.fb,
-                     padx=14, pady=5, cursor="hand2")
-        b.bind("<Button-1>", lambda _e: cmd())
-        b.bind("<Enter>", lambda _e: b.config(bg=C["line"]))
-        b.bind("<Leave>", lambda _e: b.config(bg=C["panel"]))
-        return b
+    def button(self, parent, text, cmd, accent="green"):
+        """A real button, not a Label that happens to react to clicks.
+
+        ttk.Button is what gives Tab focus, Space and Return activation, and
+        the control an accessibility tool needs to announce as a button. The
+        Label version looked identical and was reachable by mouse only.
+        """
+        return ttk.Button(parent, text=text, command=cmd, takefocus=True,
+                          cursor="hand2", style=f"{accent}.T.TButton")
 
     def label(self, parent, text):
         return tk.Label(parent, text=text, bg=C["bg"], fg=C["dim"], font=self.f)
@@ -1299,8 +1370,8 @@ class App:
         self.scan_btn = self.button(row, self.t("scan"), self.do_scan)
         self.scan_btn.pack(side="left", padx=(8, 0))
         self.button(row, self.t("clear"), self.do_clear,
-                    C["dim"]).pack(side="left", padx=(6, 0))
-        self.refresh_btn = self.button(row, self.t("refresh"), self.do_refresh, C["cyan"])
+                    "dim").pack(side="left", padx=(6, 0))
+        self.refresh_btn = self.button(row, self.t("refresh"), self.do_refresh, "cyan")
         self.refresh_btn.pack(side="left", padx=(6, 0))
 
 
@@ -1312,7 +1383,7 @@ class App:
                                     textvariable=self.quality_var)
         self.quality.pack(side="left", padx=(6, 16))
         self.button(opt, self.t("settings"), self.open_settings,
-                    C["cyan"]).pack(side="left")
+                    "cyan").pack(side="left")
         self.settings_hint = tk.Label(opt, bg=C["bg"], fg=C["line"], font=self.f)
         self.settings_hint.pack(side="left", padx=(12, 0))
         self.refresh_hint()
@@ -1322,10 +1393,10 @@ class App:
         self.label(out, self.t("save_to")).pack(side="left")
         self.outdir = self.entry(out, textvariable=self.outdir_var)
         self.outdir.pack(side="left", fill="x", expand=True, padx=(6, 6), ipady=3)
-        self.button(out, self.t("browse"), self.pick_dir, C["cyan"]).pack(side="left")
+        self.button(out, self.t("browse"), self.pick_dir, "cyan").pack(side="left")
         self.button(out, self.t("open"), self.open_dir,
-                    C["cyan"]).pack(side="left", padx=(6, 0))
-        self.ff_btn = self.button(out, self.t("get_ffmpeg"), self.get_ffmpeg, C["amber"])
+                    "cyan").pack(side="left", padx=(6, 0))
+        self.ff_btn = self.button(out, self.t("get_ffmpeg"), self.get_ffmpeg, "amber")
         if not ffmpeg_path():
             self.ff_btn.pack(side="left", padx=(6, 0))
 
@@ -1357,6 +1428,10 @@ class App:
         self.tree.bind("<Button-1>", self.on_row_click)
         self.tree.bind("<<TreeviewSelect>>", lambda _e: self.show_preview())
         self.tree.bind("<Double-1>", lambda _e: self.do_download())
+        # Marking was mouse-only: arrow keys moved the selection but there was
+        # no way to actually mark a row without clicking it.
+        self.tree.bind("<space>", self.on_row_key)
+        self.tree.bind("<Return>", self.on_row_key)
         self.root.bind_all("<Control-KeyPress>", self.on_ctrl)
 
         right = tk.Frame(wrap, bg=C["panel"], width=PREVIEW_W + 20)
@@ -1395,9 +1470,9 @@ class App:
         # Log controls sit hard right; the action group - status, bar, download -
         # stays together on the left where the size total already is.
         self.button(bar, self.t("log"), self.toggle_log,
-                    C["cyan"]).pack(side="right", padx=(6, 0))
+                    "cyan").pack(side="right", padx=(6, 0))
         self.button(bar, self.t("copy_log"), self.copy_log,
-                    C["cyan"]).pack(side="right")
+                    "cyan").pack(side="right")
 
         self.status = tk.Label(bar, text=self.t("ready"), bg=C["bg"], fg=C["dim"],
                                font=self.f, anchor="w", width=STATUS_CHARS)
@@ -1405,9 +1480,9 @@ class App:
         self.prog = ttk.Progressbar(bar, style="T.Horizontal.TProgressbar",
                                     length=200, maximum=100)
         self.prog.pack(side="left", padx=(10, 10))
-        self.dl_btn = self.button(bar, self.t("download"), self.do_download, C["amber"])
+        self.dl_btn = self.button(bar, self.t("download"), self.do_download, "amber")
         self.dl_btn.pack(side="left")
-        self.stop_btn = self.button(bar, self.t("stop"), self.stop_all, C["red"])
+        self.stop_btn = self.button(bar, self.t("stop"), self.stop_all, "red")
 
     # -- marking, preview, log --------------------------------------------
 
@@ -1423,6 +1498,17 @@ class App:
         else:
             self.toggle_mark(row)
         self.tree.selection_set(row)  # keep the preview in step
+        return "break"
+
+    def on_row_key(self, _event):
+        """Space or Return on the focused row - the keyboard twin of a click."""
+        row = self.tree.focus()
+        if not row:
+            return None
+        if self.busy:
+            self.pull_from_queue(row)
+        else:
+            self.toggle_mark(row)
         return "break"
 
     def pull_from_queue(self, row):
@@ -1625,7 +1711,7 @@ class App:
         self.entry(folder, width=40, textvariable=self.outdir_var).pack(
             side="left", fill="x", expand=True, ipady=3)
         self.button(folder, self.t("browse"), self.pick_dir,
-                    C["cyan"]).pack(side="left", padx=(6, 0))
+                    "cyan").pack(side="left", padx=(6, 0))
 
         # proxy ------------------------------------------------------------
         head(self.t("dlg_proxy"))
@@ -1686,9 +1772,9 @@ class App:
                 self.rebuild()
 
         self.button(foot, self.t("save"), apply_and_close,
-                    C["green"]).pack(side="right")
+                    "green").pack(side="right")
         self.button(foot, self.t("cancel"), win.destroy,
-                    C["dim"]).pack(side="right", padx=(0, 8))
+                    "dim").pack(side="right", padx=(0, 8))
 
         win.bind("<Escape>", lambda _e: win.destroy())
         win.update_idletasks()
@@ -1706,6 +1792,10 @@ class App:
         self.build()
         if items:
             self.q.put(("items", items, None))
+            # pump() reschedules itself on the way out, so the tick that is
+            # already pending has to go first - otherwise every language change
+            # leaves another loop running, and close() only cancels the last.
+            self.root.after_cancel(self.tick)
             self.pump()
             for i, row in enumerate(self.tree.get_children()):
                 if i in marked:
@@ -1722,7 +1812,12 @@ class App:
     def open_dir(self):
         d = self.outdir_var.get().strip() or os.getcwd()
         os.makedirs(d, exist_ok=True)
-        webbrowser.open(f"file:///{d}")
+        # webbrowser hands file:// to the *browser*, and mangles a path with a
+        # space or a '#' in it on the way. The shell opens the file manager.
+        if hasattr(os, "startfile"):
+            os.startfile(d)
+        else:
+            webbrowser.open("file://" + d)
 
     def say(self, text, colour=None):
         self.q.put(("status", text, colour or C["dim"]))
@@ -1801,7 +1896,8 @@ class App:
     def do_download(self):
         if self.busy:
             return
-        rows = [r for r in self.tree.get_children() if r in self.marked]             or self.tree.get_children()
+        rows = ([r for r in self.tree.get_children() if r in self.marked]
+                or self.tree.get_children())
         picks = [(self.tree.index(r), self.items[self.tree.index(r)]) for r in rows]
         self.cancelled.clear()
         if not picks:
@@ -1816,19 +1912,21 @@ class App:
             target=self._dl_worker,
             args=(picks, outdir, self.proxy_var.get().strip() or None,
                   self.quality_var.get(), self.clean_var.get(),
-                  self.cookies_var.get()),
+                  self.cookies_var.get(), self.workers(), self.attempts()),
             daemon=True).start()
 
-    def _dl_worker(self, picks, outdir, proxy, quality, clean, cookies=""):
+    def _dl_worker(self, picks, outdir, proxy, quality, clean, cookies="",
+                   workers=PARALLEL, tries=ATTEMPTS):
         from concurrent.futures import ThreadPoolExecutor
 
         total_items = len(picks)
-        workers = max(1, min(MAX_PARALLEL, int(self.parallel_var.get())))
-        tries = max(1, int(self.attempts_var.get()))
         self.log(f"downloading {total_items} item(s), {workers} at a time, to {outdir}")
 
-        frac: dict[int, float] = {}    # index -> 0..1 of that file
-        speed: dict[int, float] = {}   # index -> bytes/sec, live transfers only
+        # Both dicts are keyed up front and never grow or shrink afterwards:
+        # report() iterates them under the lock while workers write without it,
+        # and a resize mid-iteration is a RuntimeError waiting to happen.
+        frac: dict[int, float] = {i: 0.0 for i, _ in picks}   # index -> 0..1
+        speed: dict[int, float | None] = {i: None for i, _ in picks}  # None = not running
         tally = {"ok": 0, "fail": 0, "dropped": 0}
         lock = threading.Lock()
         last_shown = [0.0]
@@ -1843,7 +1941,7 @@ class App:
                     return
                 last_shown[0] = now
                 progressed = sum(frac.values())
-                live = list(speed.values())
+                live = [v for v in speed.values() if v is not None]
                 settled = tally["ok"] + tally["fail"] + tally["dropped"]
             self.q.put(("prog", progressed / total_items * 100, None))
             bits = [f"{settled}/{total_items}"]
@@ -1897,12 +1995,14 @@ class App:
                         self.log(f"cancelled :: {it.name}", "warn")
                         return
                     except Permanent as exc:
+                        drop_part(it, outdir)
                         with lock:
                             tally["fail"] += 1
                         self.log(f"FAILED :: {it.name} :: {exc}", "error")
                         return
                     except Exception as exc:
                         if attempt == tries:
+                            drop_part(it, outdir)
                             with lock:
                                 tally["fail"] += 1
                             self.log(f"FAILED after {tries} tries :: {it.name} "
@@ -1918,7 +2018,7 @@ class App:
                         started[0] = time.monotonic()
             finally:
                 frac[index] = 1.0
-                speed.pop(index, None)
+                speed[index] = None
                 report(force=True)
 
         with ThreadPoolExecutor(max_workers=workers) as pool:
@@ -1938,9 +2038,10 @@ class App:
 
     def set_busy(self, busy):
         self.busy = busy
-        for b, colour in ((self.scan_btn, C["green"]), (self.dl_btn, C["amber"]),
-                          (self.ff_btn, C["amber"]), (self.refresh_btn, C["cyan"])):
-            b.config(fg=C["dim"] if busy else colour)
+        # A disabled ttk.Button also drops out of the Tab order, which the old
+        # greyed-out Label did not - the state is now real, not just painted.
+        for b in (self.scan_btn, self.dl_btn, self.ff_btn, self.refresh_btn):
+            b.state(["disabled"] if busy else ["!disabled"])
         if busy:
             self.prog.config(value=0)
 
@@ -1972,6 +2073,11 @@ class App:
                     else:
                         from PIL import ImageTk
                         photo = ImageTk.PhotoImage(img)
+                        # ponytail: a decoded bitmap each, and a playlist can be
+                        # 200 rows. Dropping the lot is fine - worst case a
+                        # revisited row re-fetches its preview.
+                        if len(self.thumb_cache) > MAX_THUMB_CACHE:
+                            self.thumb_cache.clear()
                         self.thumb_cache[url] = photo
                         if token == self.preview_token:
                             self.set_thumb(photo)
@@ -2029,6 +2135,11 @@ def selftest():
     assert safe_name("  spaced  ") == "spaced"
     assert safe_name("trailing dots...") == "trailing dots", "NTFS drops those"
     assert safe_name("") == "file" and safe_name("   ") == "file"
+    # reserved device names: opening one writes nowhere instead of failing loudly
+    assert safe_name("NUL") == "_NUL" and safe_name("nul.jpg") == "_nul.jpg"
+    assert safe_name("COM1.txt") == "_COM1.txt" and safe_name("LPT9") == "_LPT9"
+    assert safe_name("console.log") == "console.log", "only the exact names"
+    assert safe_name("NULL.txt") == "NULL.txt", "NULL is a file, NUL is a device"
     assert safe_name("///") == "___", "separators become a usable name"
     assert len(safe_name("x" * 500)) == 120
     assert human(0) == "-" and human(2048) == "2.0K"
@@ -2159,6 +2270,17 @@ def selftest():
     assert host_slot("https://a.com/1.jpg") is host_slot("https://a.com/2.jpg")
     assert host_slot("https://a.com/1.jpg") is not host_slot("https://b.com/1.jpg")
 
+    # a .part nobody will finish is litter; one that can still resume is not
+    tmpdir = tempfile.mkdtemp()
+    dead = Item("https://h/x.bin", "x.bin", "file")
+    open(part_path(tmpdir, dead.name, dead.url), "wb").write(b"half")
+    drop_part(dead, tmpdir)
+    assert not os.path.exists(part_path(tmpdir, dead.name, dead.url))
+    drop_part(dead, tmpdir)  # already gone must not raise
+    # same name, different url must not collide
+    a, b = Item("https://h/1/f.bin", "f.bin", "file"), Item("https://h/2/f.bin", "f.bin", "file")
+    assert part_path(tmpdir, a.name, a.url) != part_path(tmpdir, b.name, b.url)
+
     global SETTINGS_FILE
     keep = SETTINGS_FILE
     SETTINGS_FILE = os.path.join(tempfile.mkdtemp(), "settings.json")
@@ -2171,9 +2293,97 @@ def selftest():
     with open(SETTINGS_FILE, "w") as fh:
         fh.write("{ not json")
     assert load_settings() == {}, "corrupt file must not raise"
+
+    # a hand-edited settings file, or anything typed into a Spinbox, reaches
+    # these as text - none of it may reach tk as an int and blow up
+    assert clamp_int("5", 3, 1, 10) == 5
+    assert clamp_int("abc", 3, 1, 10) == 3 and clamp_int("", 3, 1, 10) == 3
+    assert clamp_int(None, 3, 1, 10) == 3
+    assert clamp_int("99", 3, 1, 10) == 10 and clamp_int("-4", 3, 1, 10) == 1
+    assert clamp_int(7.9, 3, 1, 10) == 7, "floats truncate, they do not raise"
     SETTINGS_FILE = keep
 
+    ui_selftest()
     print("selftest ok")
+
+
+def ui_selftest():
+    """The parts that only break once there is a real window.
+
+    Builds the app against a temp settings file, drives the widgets the way a
+    keyboard user would, and tears it down. Skipped where there is no display.
+    """
+    import tempfile
+
+    global SETTINGS_FILE, ffmpeg_path
+    keep_file, keep_ff = SETTINGS_FILE, ffmpeg_path
+    SETTINGS_FILE = os.path.join(tempfile.mkdtemp(), "settings.json")
+    ffmpeg_path = lambda: "/nonexistent/ffmpeg"   # never fetch during a test
+    try:
+        root = tk.Tk()
+    except tk.TclError:
+        print("ui selftest skipped - no display")
+        SETTINGS_FILE, ffmpeg_path = keep_file, keep_ff
+        return
+    try:
+        root.withdraw()
+        app = App(root)
+
+        # Buttons must be controls, not Labels wearing a click handler: only a
+        # real one takes Tab focus and announces itself to a screen reader.
+        gated = [app.scan_btn, app.dl_btn, app.ff_btn, app.refresh_btn]
+        for b in gated + [app.stop_btn]:
+            assert isinstance(b, ttk.Button), type(b)
+            assert str(b.cget("takefocus")) in ("1", "True"), "not tab-reachable"
+            assert b.cget("command"), "button with nothing wired to it"
+        app.set_busy(True)
+        assert all("disabled" in b.state() for b in gated), "busy must really disable"
+        assert "disabled" not in app.stop_btn.state(), "stop must survive busy"
+        app.set_busy(False)
+        assert all("disabled" not in b.state() for b in gated)
+
+        app.q.put(("items", [Item("https://h/a.jpg", "a.jpg", "image", 100),
+                             Item("https://h/b.mp4", "b.mp4", "video", 200)], None))
+        app.pump()
+        rows = app.tree.get_children()
+        assert len(rows) == 2, rows
+
+        # marking used to need a mouse
+        app.tree.focus(rows[0])
+        app.on_row_key(None)
+        assert rows[0] in app.marked, "space did not mark the row"
+        app.on_row_key(None)
+        assert rows[0] not in app.marked, "space did not unmark the row"
+
+        # junk in a Spinbox must not be able to trap the user in the window
+        app.attempts_var.set("abc")
+        app.parallel_var.set("")
+        assert app.attempts() == ATTEMPTS and app.workers() == PARALLEL
+        app.parallel_var.set("999")
+        assert app.workers() == MAX_PARALLEL
+        app.attempts_var.set("3")
+        app.parallel_var.set("4")
+
+        # every language change used to leave another pump loop running
+        pending = len(root.tk.call("after", "info"))
+        for code in LANGUAGES:
+            app.t.set(code)
+            app.rebuild()
+            assert len(root.tk.call("after", "info")) == pending, "rebuild leaked a timer"
+        assert len(app.tree.get_children()) == 2, "results lost on language change"
+
+        app.close()   # remember() must not raise on the way out
+        try:
+            root.winfo_exists()
+            raise AssertionError("close() left the window standing")
+        except tk.TclError:
+            pass          # destroyed, which is the point
+    finally:
+        SETTINGS_FILE, ffmpeg_path = keep_file, keep_ff
+        try:
+            root.destroy()
+        except tk.TclError:
+            pass
 
 
 def main():

@@ -8,3 +8,4 @@ settings.json
 *.part
 .deps-ok
 crash.log
+build.log

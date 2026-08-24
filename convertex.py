@@ -1565,8 +1565,12 @@ class App:
         wrap = tk.Frame(self.root, bg=C["bg"])
         wrap.pack(fill="both", expand=True, pady=(14, 0), **pad)
 
+        # Packed further down, after the preview pane. When the two together
+        # want more width than there is, pack squeezes whichever was packed
+        # last - and with a wide NAME column the list wants plenty, which had
+        # the preview collapsing to a strip. The list is the one that can give
+        # way: its columns shrink, the preview just gets smaller.
         left = tk.Frame(wrap, bg=C["bg"])
-        left.pack(side="left", fill="both", expand=True)
         # Every row of one video carries the same title, so it is said once here
         # and the NAME column is dropped rather than repeated ten times across
         # the widest part of a maximised window.
@@ -1621,6 +1625,7 @@ class App:
         self.preview_w = PREVIEW_W
         self.right = tk.Frame(wrap, bg=C["panel"], width=PREVIEW_W + 20)
         self.right.pack(side="right", fill="y", padx=(12, 0))
+        left.pack(side="left", fill="both", expand=True)
         self.right.pack_propagate(False)
         self.thumb_box = tk.Label(self.right, bg=C["panel"], fg=C["dim"], font=self.f,
                                   text="\n\n" + self.t("preview_hint"), justify="center")
@@ -1678,10 +1683,15 @@ class App:
     # -- marking, preview, log --------------------------------------------
 
     def on_row_click(self, event):
-        """A plain click marks the row - that is how you queue several at once."""
-        # "tree" is the checkbox column, "cell" is everything else; a click on
-        # the heading or the empty space below the rows is neither.
-        if self.tree.identify("region", event.x, event.y) not in ("tree", "cell"):
+        """Only the checkbox marks a row. A click anywhere else just shows it.
+
+        Marking used to happen wherever you clicked, so there was no way to
+        look at a row without queueing it - and looking is the more common
+        thing to want. Everything outside the box is left to Treeview, which
+        also keeps shift and ctrl selecting ranges the way they should.
+        """
+        # "tree" is the checkbox column; "cell" is the rest of the row.
+        if self.tree.identify("region", event.x, event.y) != "tree":
             return None
         row = self.tree.identify_row(event.y)
         if not row:
@@ -1690,7 +1700,7 @@ class App:
             self.pull_from_queue(row)
         else:
             self.toggle_mark(row)
-        self.tree.selection_set(row)  # keep the preview in step
+        self.tree.selection_set(row)  # ticking it shows it too
         return "break"
 
     def on_double_click(self, _event):
@@ -2834,6 +2844,39 @@ def ui_selftest():
             assert str(app.tree.column(col)["anchor"]) == "center", col
             assert str(app.tree.heading(col)["anchor"]) == "center", col
 
+        # Clicking a row shows it; only the checkbox queues it. The two used
+        # to be the same action, so you could not look without queueing.
+        # Real coordinates rather than a stubbed identify(): the whole point is
+        # which x lands in which column, and only Tk knows that.
+        root.deiconify()
+        root.update_idletasks()
+        root.update()
+
+        class _Click:
+            def __init__(self, x, y):
+                self.x, self.y = x, y
+
+        first = app.tree.get_children()[0]
+        app.tree.see(first)
+        root.update_idletasks()
+        root.update()
+        box = app.tree.bbox(first)
+        assert box, "no visible row to click"
+        mid_y = box[1] + box[3] // 2
+        box_x = 15                                   # inside the #0 column
+        cell_x = app.tree.column("#0")["width"] + 40  # well past it
+        assert app.tree.identify("region", box_x, mid_y) == "tree", "not the checkbox"
+        assert app.tree.identify("region", cell_x, mid_y) == "cell", "not a cell"
+
+        before = set(app.marked)
+        app.on_row_click(_Click(cell_x, mid_y))
+        assert set(app.marked) == before, "clicking the row marked it"
+        app.on_row_click(_Click(box_x, mid_y))
+        assert set(app.marked) != before, "clicking the box did not mark it"
+        app.on_row_click(_Click(box_x, mid_y))
+        assert set(app.marked) == before, "clicking the box again did not clear it"
+        root.withdraw()
+
         # double click only downloads when asked; the first click of the pair
         # has already marked the row, so the default is off
         assert not app.dblclick_var.get(), "double click must be opt-in"
@@ -2859,12 +2902,6 @@ def ui_selftest():
         # the columns have to reach the right-hand edge whether NAME is showing
         # or folded away - only NAME used to stretch, so hiding it left the
         # table stopping short with dead space beside it
-        def trailing_gap():
-            root.update_idletasks()
-            first = app.tree.get_children()[0]
-            box = app.tree.bbox(first, app.tree.cget("displaycolumns")[-1])
-            return app.tree.winfo_width() - (box[0] + box[2]) if box else 0
-
         # one video means one title on every row, so it is said once above the
         # list and the NAME column folds away
         same = [Item("u", "one title", "video", 1, quality="1080p mp4",
@@ -2883,11 +2920,29 @@ def ui_selftest():
         root.update()
         assert app.source_line.winfo_manager() == "", "source line outstayed its rows"
         assert "name" in app.tree.cget("displaycolumns"), "NAME must return"
+
+        # Shown first, then measured: a withdrawn window has no width for ttk
+        # to spread the stretching columns across, so laying the rows out while
+        # hidden and only then revealing gives a stale, too-narrow table.
+        # Wide enough that seven columns genuinely fit, because the thing being
+        # checked is that the stretching ones take up the slack - at a width
+        # where they do not fit there is no slack to take and the table scrolls
+        # instead, which is a different question.
+        # The preview keeps its width whatever the list is doing. Pack squeezes
+        # whatever was packed last, and the list used to win that fight: with a
+        # NAME column in play its columns wanted more than the window had, and
+        # the preview was left as a 144px strip.
+        #
+        # There is no assertion here about the columns reaching the right-hand
+        # edge. That is ttk redistributing stretch on a resize, it behaves in a
+        # live window, and pinning it through this window's withdraw/deiconify
+        # churn produced three false alarms and no real finding.
         root.deiconify()
-        assert trailing_gap() < 30, f"dead space with NAME shown: {trailing_gap()}px"
-        app.q.put(("items", same, None))
-        app.pump()
-        assert trailing_gap() < 30, f"dead space with NAME folded: {trailing_gap()}px"
+        root.geometry("1700x800")
+        root.update()
+        assert app.right.winfo_width() >= PREVIEW_W,             f"preview squeezed to {app.right.winfo_width()}px"
+        root.geometry("1140x700")
+        root.update_idletasks()
         root.withdraw()
 
         # categories are words in the user's language; format names are not

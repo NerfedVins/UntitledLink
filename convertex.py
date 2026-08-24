@@ -635,7 +635,55 @@ def probe_all(items: list[Item], s: requests.Session) -> list[Item]:
     return list({it.url: it for it in probed}.values())
 
 
-def scrape_page(url: str, proxy: str | None, log) -> list[Item]:
+# Built once. Listing them is cheap, but matching a URL walks all 1751 of them,
+# so the list itself is not rebuilt for every iframe on a page.
+_EXTRACTORS: list | None = None
+
+# An article with more embeds than this is a listing page, and each one costs a
+# round trip to the site it points at.
+MAX_EMBEDS = 4
+
+
+def embed_urls(soup, base: str) -> list[str]:
+    """iframe sources on a page that yt-dlp has a real extractor for.
+
+    An article embeds its video rather than linking to the file, so a scrape
+    that only reads <img> and <a> comes back with the photos and misses the
+    thing the article is actually about.
+
+    Which iframes are worth following is a question yt-dlp can already answer,
+    and asking it beats keeping a list of video hosts in here that would be out
+    of date by next month. It also drops the tracking pixels and the social
+    buttons for free: nothing has an extractor for those.
+    """
+    global _EXTRACTORS
+    try:
+        if _EXTRACTORS is None:
+            from yt_dlp.extractor import gen_extractor_classes
+            _EXTRACTORS = [ie for ie in gen_extractor_classes()
+                           if ie.ie_key() != "Generic"]
+    except ImportError:
+        return []
+
+    seen, out = set(), []
+    for tag in soup.find_all("iframe"):
+        # Lazy-loaded embeds park the real address in a data attribute and only
+        # move it to src once the frame scrolls into view, which never happens
+        # to a page nobody is looking at.
+        raw = next((tag.get(a) for a in ("src", "data-src", "data-lazy-src")
+                    if tag.get(a)), None)
+        if not raw:
+            continue
+        full = urljoin(base, raw.strip())
+        if not full.startswith(("http://", "https://")) or full in seen:
+            continue
+        seen.add(full)
+        if any(ie.suitable(full) for ie in _EXTRACTORS):
+            out.append(full)
+    return out
+
+
+def scrape_page(url: str, proxy: str | None, log, embeds: bool = True) -> list[Item]:
     s = session_for(proxy)
     # streamed so the body can be read in a bounded slice below
     r = s.get(url, timeout=25, stream=True)
@@ -671,7 +719,44 @@ def scrape_page(url: str, proxy: str | None, log) -> list[Item]:
     items = probe_all([Item(u, name_from_url(u), k, thumb=u if k == "image" else None)
                        for u, k in found.items()], s)
     items.sort(key=lambda i: (i.kind, -i.size))
-    return items
+
+    # Embedded video goes on top: on a page that has one, it is usually the
+    # thing the page is about, and the images are the furniture around it.
+    # Skipped when the caller has already resolved the embeds itself.
+    return (embedded_media(soup, url, proxy, log) if embeds else []) + items
+
+
+def embedded_media(soup, url: str, proxy: str | None, log) -> list[Item]:
+    """Resolve the page's video embeds into rows, in parallel.
+
+    Each one is a round trip to whichever site it points at, so they run
+    together rather than one after another, and the count is capped.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    embeds = embed_urls(soup, url)
+    if not embeds:
+        return []
+    if len(embeds) > MAX_EMBEDS:
+        log(f"{len(embeds)} embeds, looking at the first {MAX_EMBEDS}")
+        embeds = embeds[:MAX_EMBEDS]
+    log(f"{len(embeds)} embedded video(s) - asking yt-dlp about them...")
+
+    def resolve(embed):
+        try:
+            found, err = scan_media(embed, proxy, log)
+            if err:
+                log(f"embed skipped :: {err}")
+            return found
+        except Exception as exc:      # one bad embed must not sink the scrape
+            log(f"embed failed :: {embed} :: {exc}")
+            return []
+
+    with ThreadPoolExecutor(max_workers=MAX_EMBEDS) as pool:
+        rows = [it for group in pool.map(resolve, embeds) for it in group]
+    if rows:
+        log(f"{len(rows)} row(s) from embedded video")
+    return rows
 
 
 class _Hush:
@@ -1022,6 +1107,18 @@ def scan(url: str, proxy: str | None, log, cookies: str = "",
     log("asking yt-dlp...")
     items, err = scan_media(url, proxy, log, cookies)
     if items:
+        if not is_media_host(url):
+            # yt-dlp reads a random page through its generic extractor, which
+            # follows an embedded video and hands back that - and only that.
+            # The page's own photographs are still worth having, and asking for
+            # a link's media should not mean picking one or the other.
+            #
+            # Media hosts are left alone: scraping one of those returns avatars
+            # and interface icons, which is why they are excluded by name.
+            try:
+                items = items + scrape_page(url, proxy, log, embeds=False)
+            except Exception as exc:
+                log(f"the page itself would not scrape :: {exc}")
         return items
 
     why = ""
@@ -2644,6 +2741,31 @@ def selftest():
     assert rates == sorted(rates, reverse=True), rates
     assert audio_rows[-1].quality.startswith("mp3"), "the re-encode goes last"
     assert all(r.res == "" for r in audio_rows), "audio has no resolution"
+
+    # Which iframes are worth following is yt-dlp's question to answer, so the
+    # tracking pixels and the social buttons fall out for free. This only runs
+    # as a fallback - yt-dlp's own generic extractor finds page embeds first,
+    # and in testing it found every variant thrown at it.
+    from bs4 import BeautifulSoup as _Soup
+    page = _Soup("""
+      <iframe src="https://www.googletagmanager.com/ns.html?id=GTM-X"></iframe>
+      <iframe src="https://www.facebook.com/plugins/like.php?href=x"></iframe>
+      <iframe src="https://www.youtube.com/embed/aaaaaaaaaaa"></iframe>
+      <iframe data-src="//player.vimeo.com/video/76979871"></iframe>
+      <iframe src="/local/page.html"></iframe>
+      <iframe src="https://www.youtube.com/embed/aaaaaaaaaaa"></iframe>
+      <iframe></iframe>
+    """, "html.parser")
+    embeds = embed_urls(page, "https://news.example.com/article")
+    assert len(embeds) == 2, embeds
+    assert any("youtube" in u for u in embeds) and any("vimeo" in u for u in embeds)
+    assert not any("googletagmanager" in u or "plugins/like" in u for u in embeds), embeds
+    assert all(u.startswith("https://") for u in embeds), "relative url got through"
+    assert len(set(embeds)) == len(embeds), "the same embed twice"
+    assert embed_urls(_Soup("<p>nothing here</p>", "html.parser"), "https://x/") == []
+    # an id of the wrong shape is not a video, and yt-dlp knows that too
+    short = _Soup('<iframe src="https://www.youtube.com/embed/abc"></iframe>', "html.parser")
+    assert embed_urls(short, "https://x/") == [], "took a malformed id"
 
     # resume: 206 appends to what is on disk, anything else starts clean
     assert resume_plan(500, 206, 1500) == ("ab", 500, 2000)

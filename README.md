@@ -369,3 +369,23 @@ Off by default. Turn it on in settings and a double click downloads the row
 under the pointer. The reason it is not on to begin with: the first click of
 the pair has already marked or unmarked that row, so a double click landing by
 accident would queue something you never asked for.
+
+## Embedded video, and the pictures around it
+
+A page that embeds a video used to hand back one or the other. yt-dlp reads an
+ordinary web page through its generic extractor, which follows the embed and
+returns **that** - so the article's own photographs never appeared. Asking for
+a link's media should not mean picking one.
+
+Now a page that is not a known media host gets both: whatever yt-dlp resolved
+out of the embed, listed first, followed by the images and files on the page
+itself. Media hosts are still exempt - scraping one of those returns avatars
+and interface icons rather than anything you asked for.
+
+If yt-dlp finds nothing at all, the page scraper looks at the `<iframe>` tags
+itself and passes anything yt-dlp has a real extractor for back through it.
+That is a fallback: in testing, yt-dlp's own embed detection caught every
+variant tried, including lazy-loaded `data-src` and protocol-relative ones.
+Choosing which iframes are worth following is left to yt-dlp rather than to a
+list of video hosts kept here, which drops the tracking pixels and the social
+buttons for free - nothing has an extractor for those.

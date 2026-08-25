@@ -1569,6 +1569,13 @@ class App:
                          + " - start the Tor Browser or the tor service", "warn")
                 return
             self.log(f"tor: routing everything through {self.tor_addr}")
+            if not self.private_var.get():
+                # Hiding the address while the session is written to disk is
+                # half a job, so the private one comes on with it. Turned on,
+                # not held on: switch it back off and it stays off - someone
+                # may want their settings remembered and only the route hidden.
+                self.private_var.set(True)
+                self.say(self.t("tor_private"), C["green"])
         self.refresh_hint()
 
     def remember(self):
@@ -3385,9 +3392,16 @@ def ui_selftest():
         fake_tor = "socks5h://127.0.0.1:9150"
         globals()["tor_proxy"] = lambda *a, **k: fake_tor
         try:
+            assert not app.private_var.get()
             app.tor_var.set(True)
             assert app.tor_var.get(), "tor was on and available, so it stays on"
             assert app.proxy() == fake_tor, "tor wins over the typed proxy"
+            # an anonymous route with the session written to disk is half a job
+            assert app.private_var.get(), "tor did not bring the private session"
+            # brought on, not held on
+            app.private_var.set(False)
+            assert not app.private_var.get(), "private mode could not be turned off"
+            assert app.tor_var.get(), "turning private off must not turn tor off"
             app.cookies_var.set("firefox")
             app.refresh_hint()
             assert "cookies name you" in app.settings_hint.cget("text"),                 "a login over tor is worth a word"
@@ -3400,6 +3414,7 @@ def ui_selftest():
         try:
             app.tor_var.set(True)
             assert not app.tor_var.get(),                 "tor is not running, so the box must not pretend it is on"
+            assert not app.private_var.get(),                 "tor never came on, so nothing should have come on with it"
             assert app.proxy() == "http://127.0.0.1:8080",                 "with tor off the typed proxy is the route again"
         finally:
             globals()["tor_proxy"] = keep_ready

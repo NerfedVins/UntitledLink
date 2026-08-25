@@ -49,6 +49,7 @@ STRINGS = {
                         "cookies off with it - a login says who you are\n"
                         "whatever address it arrives from.",
         "tor_missing": "tor is not running on 127.0.0.1:9050",
+        "tor_private": "tor on :: private session on with it",
         "dlg_dblclick": "double click a row to download it",
         "dlg_dblclick_hint": "Off by default. The first click of the pair has\n"
                              "already marked the row, so an accidental double\n"
@@ -136,6 +137,7 @@ STRINGS = {
                         "Κλείσε μαζί τα cookies - μια σύνδεση λέει ποιος\n"
                         "είσαι από όποια διεύθυνση κι αν έρθει.",
         "tor_missing": "το tor δεν τρέχει στο 127.0.0.1:9050",
+        "tor_private": "tor ενεργό :: μαζί και ιδιωτική συνεδρία",
         "dlg_dblclick": "διπλό κλικ σε γραμμή για λήψη",
         "dlg_dblclick_hint": "Ανενεργό εξ ορισμού. Το πρώτο κλικ έχει ήδη\n"
                              "μαρκάρει τη γραμμή, οπότε ένα κατά λάθος διπλό\n"

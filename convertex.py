@@ -1559,22 +1559,31 @@ class App:
             # "big" is the same button with more presence, for download - the
             # thing every visit to this window is actually for.
             for prefix, size, pad_xy in (("", 10, (14, 5)), ("big", 12, (26, 9))):
-                # focusthickness=0 kills clam's dashed rectangle, which drew
-                # itself inside the button and read as a broken border rather
-                # than as focus. The focus state tints the whole button
-                # instead, so a keyboard user still sees where they are.
-                st.configure(f"{prefix}{accent}.T.TButton", background=C["panel"],
-                             foreground=C[accent], font=(self.mono, size, "bold"),
-                             borderwidth=0, relief="flat", padding=pad_xy,
-                             focusthickness=0, anchor="center", width=0)
-                # Pressed inverts: the accent fills the button and the text
-                # goes dark. Hover and focus share the lighter panel, so the
-                # press is the one state that cannot be mistaken for another.
-                # First match wins, which is why pressed leads.
-                st.map(f"{prefix}{accent}.T.TButton",
+                name = f"{prefix}{accent}.T.TButton"
+                st.configure(name, background=C["panel"], foreground=C[accent],
+                             font=(self.mono, size, "bold"), borderwidth=0,
+                             relief="flat", padding=pad_xy, anchor="center",
+                             width=0)
+                # Button.focus is the element that drew clam's dashed rectangle
+                # inside the button, and it draws it whatever -focusthickness
+                # says, so the element is taken out of the layout rather than
+                # configured. Button.border stays: it is what paints the
+                # background these buttons are made of.
+                st.layout(name, [("Button.border", {
+                    "sticky": "nswe", "border": "1", "children": [
+                        ("Button.padding", {"sticky": "nswe", "children": [
+                            ("Button.label", {"sticky": "nswe"})]})]})])
+                # Pressed inverts - the accent fills the button and the text
+                # goes dark - so a click is unmistakable without a border to
+                # announce it. Focus and hover take the lighter panel, which
+                # still tells a keyboard user where they are. First match wins,
+                # so pressed leads. Disabled keeps dim text: it was the line
+                # colour, near enough to the background that the word
+                # disappeared and the button read as an empty box.
+                st.map(name,
                        background=[("pressed", C[accent]), ("active", C["line"]),
                                    ("focus", C["line"])],
-                       foreground=[("pressed", C["bg"]), ("disabled", C["line"])])
+                       foreground=[("pressed", C["bg"]), ("disabled", C["dim"])])
         st.configure("T.TCombobox", fieldbackground=C["panel"], background=C["panel"],
                      foreground=C["fg"], arrowcolor=C["dim"], bordercolor=C["line"],
                      selectbackground=C["panel"], selectforeground=C["fg"])
@@ -3251,12 +3260,16 @@ def ui_selftest():
 
         # a pressed button changes colour as a whole - the dashed rectangle
         # clam drew inside it read as a broken border, not as a state
-        for accent in ("green", "dim"):
-            name = f"{accent}.T.TButton"
-            assert str(ttk.Style().lookup(name, "focusthickness")) == "0",                 f"{name} still draws the dashed focus ring"
-            assert ttk.Style().lookup(name, "background", ["pressed"]) == C[accent], name
-            assert ttk.Style().lookup(name, "foreground", ["pressed"]) == C["bg"], name
-            assert ttk.Style().lookup(name, "background", ["focus"]) == C["line"],                 "a keyboard user needs to see which button has focus"
+        for accent in ("green", "amber"):
+            for name in (f"{accent}.T.TButton", f"big{accent}.T.TButton"):
+                layout = str(ttk.Style().layout(name))
+                assert "focus" not in layout,                     f"{name} still has the element that draws the dashed ring"
+                assert "Button.label" in layout, f"{name} lost its text: {layout}"
+                assert ttk.Style().lookup(name, "background", ["pressed"]) == C[accent]
+                assert ttk.Style().lookup(name, "foreground", ["pressed"]) == C["bg"]
+                assert ttk.Style().lookup(name, "background", ["focus"]) == C["line"],                     "a keyboard user needs to see which button has focus"
+                # the word has to stay legible while the button is off
+                assert ttk.Style().lookup(name, "foreground", ["disabled"]) == C["dim"]
 
         # download is the primary action and reads as one: bigger than the
         # buttons around it, and present both above the list and below it

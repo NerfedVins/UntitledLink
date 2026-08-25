@@ -1440,7 +1440,6 @@ class App:
             value=str(clamp_int(self.prefs.get("attempts"), ATTEMPTS, 1, 10)))
         self.parallel_var = tk.StringVar(
             value=str(clamp_int(self.prefs.get("parallel"), PARALLEL, 1, MAX_PARALLEL)))
-        self.lang_var = tk.StringVar(value=self.t.lang)
 
         self.mono = self.pick_font()
         self.f = tkfont.Font(family=self.mono, size=10)
@@ -2285,6 +2284,22 @@ class App:
                  wraplength=420, justify="left").pack(fill="x", padx=20)
 
         # buttons ----------------------------------------------------------
+        # Every widget above writes straight into the shared variable, so
+        # cancel has to put the old values back. Without this it only skipped
+        # writing settings.json: a tick you took back stayed on for the rest of
+        # the session, which is the one thing cancel promises not to do.
+        touched = (self.outdir_var, self.proxy_var, self.quality_var,
+                   self.cookies_var, self.clean_var, self.private_var,
+                   self.dblclick_var, self.quiet_var, self.parallel_var,
+                   self.attempts_var)
+        before = [v.get() for v in touched]
+
+        def cancel():
+            for var, was in zip(touched, before):
+                if var.get() != was:      # private_var traces on write
+                    var.set(was)
+            win.destroy()
+
         def apply_and_close():
             chosen = next((code for code, name in LANGUAGES.items()
                            if name == lang_box.get()), self.t.lang)
@@ -2298,10 +2313,12 @@ class App:
 
         self.button(foot, self.t("save"), apply_and_close,
                     "green").pack(side="right")
-        self.button(foot, self.t("cancel"), win.destroy,
+        self.button(foot, self.t("cancel"), cancel,
                     "dim").pack(side="right", padx=(0, 8))
 
-        win.bind("<Escape>", lambda _e: win.destroy())
+        win.bind("<Escape>", lambda _e: cancel())
+        # the window's own X is a cancel too, not a quiet save
+        win.protocol("WM_DELETE_WINDOW", cancel)
         win.update_idletasks()
         reflow()
         wide = body.winfo_reqwidth() + scroll.winfo_reqwidth() + 8
@@ -3106,8 +3123,16 @@ def ui_selftest():
             if b.cget("text") in (app.t("save"), app.t("cancel")):
                 bottom = b.winfo_rooty() + b.winfo_height()
                 assert bottom <= dlg[0].winfo_rooty() + dlg[0].winfo_height(),                     f"{b.cget('text')} sits below the dialog"
-        dlg[0].grab_release()
-        dlg[0].destroy()
+        # cancel means cancel: every widget in there writes into the shared
+        # variable, so what it has to undo is the values, not only the save
+        was_quiet, was_proxy = app.quiet_var.get(), app.proxy_var.get()
+        app.quiet_var.set(not was_quiet)
+        app.proxy_var.set("socks5://nope")
+        next(b for b in buttons if b.cget("text") == app.t("cancel")).invoke()
+        assert app.quiet_var.get() == was_quiet, "cancel kept the tick"
+        assert app.proxy_var.get() == was_proxy, "cancel kept the typed proxy"
+        assert not [w for w in root.winfo_children()
+                    if isinstance(w, tk.Toplevel)], "cancel left the dialog open"
 
         # download is the primary action and reads as one: bigger than the
         # buttons around it, and present both above the list and below it

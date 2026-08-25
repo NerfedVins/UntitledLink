@@ -1292,6 +1292,13 @@ def download_file(it: Item, outdir: str, proxy: str | None, clean: bool,
             mode, total = "ab", have
         else:
             r.raise_for_status()
+            if "html" in r.headers.get("content-type", ""):
+                # Nothing the scraper collects is served as html: every
+                # extension it knows is a real file. So this is a login wall,
+                # an error page, or a link that only looked like a download -
+                # and saving it would leave a web page on disk called .ogg.
+                # Permanent, because the next attempt fetches the same page.
+                raise Permanent("serves a web page, not a file")
             length = int(r.headers.get("content-length") or 0)
             mode, done, total = resume_plan(have, r.status_code, length)
             # What the server promised for this response, as opposed to what
@@ -2838,7 +2845,30 @@ def selftest():
                 "raise_for_status": lambda s: None,
                 "iter_content": lambda s, n: iter([b"1234"])})()
 
+    # a link that serves a web page is not a download, and no retry changes that
+    class _HtmlSession:
+        def get(self, url, **kw):
+            return type("R", (), {
+                "status_code": 200,
+                "headers": {"content-type": "text/html; charset=utf-8"},
+                "__enter__": lambda s: s, "__exit__": lambda *a: False,
+                "raise_for_status": lambda s: None,
+                "iter_content": lambda s, n: iter([b"<html>"])})()
+
     keep_session_for = session_for
+    globals()["session_for"] = lambda proxy=None: _HtmlSession()
+    try:
+        page_dir = tempfile.mkdtemp()
+        page_link = Item("https://h/song.ogg", "song.ogg", "audio")
+        try:
+            download_file(page_link, page_dir, None, False, lambda *_a: None)
+            raise AssertionError("a web page was saved as a file")
+        except Permanent as exc:
+            assert "web page" in str(exc), exc
+        assert not os.listdir(page_dir), f"it wrote something anyway: {os.listdir(page_dir)}"
+    finally:
+        globals()["session_for"] = keep_session_for
+
     globals()["session_for"] = lambda proxy=None: _ShortSession()
     try:
         short_dir = tempfile.mkdtemp()

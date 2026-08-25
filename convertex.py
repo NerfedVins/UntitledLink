@@ -227,6 +227,26 @@ def ffmpeg_path() -> str | None:
     return shutil.which("ffmpeg")
 
 
+def quiet_run(cmd: list[str], **kw):
+    """subprocess.run with nothing on screen - grandchildren included.
+
+    CREATE_NO_WINDOW keeps the process we start from opening a console, and
+    says nothing about what that process starts in turn: pip launches cmd.exe,
+    which got a console of its own and flashed one up two seconds after the app
+    had appeared. A hidden STARTUPINFO is what those inherit, so it covers the
+    part the flag cannot reach.
+    """
+    import subprocess
+    hidden = {}
+    if os.name == "nt":
+        info = subprocess.STARTUPINFO()
+        info.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        info.wShowWindow = subprocess.SW_HIDE
+        hidden = {"startupinfo": info,
+                  "creationflags": subprocess.CREATE_NO_WINDOW}
+    return subprocess.run(cmd, **hidden, **kw)
+
+
 def update_ytdlp(log) -> None:
     """Refresh yt-dlp quietly, in the background.
 
@@ -243,11 +263,10 @@ def update_ytdlp(log) -> None:
         return
     import subprocess
     try:
-        done = subprocess.run(
+        done = quiet_run(
             [sys.executable, "-m", "pip", "install", "--upgrade", "-q",
              "--disable-pip-version-check", "yt-dlp"],
-            capture_output=True, text=True, timeout=180,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            capture_output=True, text=True, timeout=180)
     except (OSError, subprocess.SubprocessError) as exc:
         log(f"yt-dlp update skipped :: {exc}", "warn")
         return
@@ -356,9 +375,7 @@ def strip_metadata(path: str) -> bool:
                "-map_metadata", "-1", "-fflags", "+bitexact", "-bitexact",
                "-c", "copy", tmp]
         try:
-            done = subprocess.run(
-                cmd, capture_output=True,
-                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            done = quiet_run(cmd, capture_output=True)
             if done.returncode == 0 and os.path.getsize(tmp) > 0:
                 os.replace(tmp, path)
                 return True

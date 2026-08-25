@@ -1138,8 +1138,11 @@ def is_media_host(url: str) -> bool:
 
 def scan(url: str, proxy: str | None, log, cookies: str = "",
          no_video_msg: str = "", cookies_msg: str = "",
-         workers: int = PARALLEL, quiet: bool = False) -> list[Item]:
-    log("asking yt-dlp...")
+         workers: int = PARALLEL, quiet: bool = False,
+         scanning_msg: str = "") -> list[Item]:
+    # log() here is the status line, so it is read by whoever is waiting:
+    # the name of the tool doing the work is not what they are waiting for.
+    log(scanning_msg or "asking yt-dlp...")
     items, err = scan_media(url, proxy, log, cookies)
     if items:
         if not is_media_host(url):
@@ -2471,7 +2474,7 @@ class App:
                          self.cookies(),
                          self.t("no_video", site=urlparse(url).netloc),
                          self.t("try_cookies"), self.workers(),
-                         bool(self.quiet_var.get()))
+                         bool(self.quiet_var.get()), self.t("scanning"))
             if token != self.scan_token:
                 self.log(f"scan finished after being stopped, result dropped "
                          f":: {url}", "warn")

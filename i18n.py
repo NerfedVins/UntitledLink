@@ -62,6 +62,10 @@ STRINGS = {
         "no_preview": "no preview\nfor this type",
         "loading": "loading...", "preview_failed": "preview failed",
         "paste_first": "paste a link first",
+        # The status line while the link is being worked out. It used to
+        # name yt-dlp, which is a tool the window has no business making
+        # anyone read about.
+        "scanning": "converting the link...",
         "found": "{n} found :: tick the boxes, then download",
         "nothing_found": "nothing downloadable found here",
         "scan_failed": "scan failed :: {err}",
@@ -135,6 +139,7 @@ STRINGS = {
         "no_preview": "χωρίς προεπισκόπηση\nγια αυτόν τον τύπο",
         "loading": "φόρτωση...", "preview_failed": "η προεπισκόπηση απέτυχε",
         "paste_first": "βάλε πρώτα ένα λινκ",
+        "scanning": "μετατροπή συνδέσμου...",
         "found": "{n} βρέθηκαν :: τσέκαρε τα κουτάκια, μετά λήψη",
         "nothing_found": "δεν βρέθηκε τίποτα για κατέβασμα εδώ",
         "scan_failed": "η σάρωση απέτυχε :: {err}",

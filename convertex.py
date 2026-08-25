@@ -460,6 +460,19 @@ def counted(n) -> str:
     return str(int(n))
 
 
+def size_cell(it: Item, measured: bool) -> str:
+    """The SIZE column, where two different unknowns used to look alike.
+
+    "-" is a question that was asked and came back empty. The middle dot is one
+    that has not been asked yet: the discreet scan measures nothing until a row
+    is opened, and a column of dashes said "this file has no size" when it
+    meant "click it and I will go and find out".
+    """
+    if it.size or measured or it.via == "ytdlp":
+        return human(it.size)
+    return "·"
+
+
 def human(n: int) -> str:
     if not n:
         return "-"
@@ -2652,7 +2665,8 @@ class App:
                                      f"{self.items[index].url}", "warn")
                             size = 0
                         self.items[index].size = size
-                        self.tree.set(rows[index], "size", human(size))
+                        self.tree.set(rows[index], "size",
+                                      size_cell(self.items[index], True))
                         # the panel was drawn before the size landed
                         if self.tree.selection() == (rows[index],):
                             self.show_preview()
@@ -2667,7 +2681,7 @@ class App:
                                          values=(self.t("kind_" + it.kind),
                                                  self.quality_text(it.quality),
                                                  it.res, it.length,
-                                                 human(it.size), it.info,
+                                                 size_cell(it, False), it.info,
                                                  it.name))
                     self.show_source_line(a)
         except queue.Empty:
@@ -2776,6 +2790,13 @@ def selftest():
     assert safe_name("///") == "___", "separators become a usable name"
     assert len(safe_name("x" * 500)) == 120
     assert human(0) == "-" and human(2048) == "2.0K"
+    # the two unknowns in the SIZE column have to look different: not measured
+    # yet is a dot you can click, measured and empty-handed is a dash
+    unmeasured = Item("https://h/a.mp4", "a.mp4", "video")
+    assert size_cell(unmeasured, False) == "·"
+    assert size_cell(unmeasured, True) == "-", "asked and got nothing is a dash"
+    assert size_cell(Item("https://h/b.mp4", "b", "video", 2048), False) == "2.0K"
+    assert size_cell(Item("https://h/p", "p", "video", via="ytdlp"), False) == "-",         "a yt-dlp row is never measured with a HEAD, so it has nothing to wait for"
     assert clock(0) == "" and clock(161) == "2:41" and clock(3723) == "1:02:03"
     assert codec_name("av01.0.08M.08") == "av01" and codec_name("none") == ""
     assert codec_name(None) == "" and codec_name("vp9") == "vp9"

@@ -1730,6 +1730,16 @@ class App:
         self.dl_btn_top = self.button(out, self.t("download"), self.do_download,
                                       "amber", big=True)
         self.dl_btn_top.pack(side="left", padx=(18, 0))
+        # Private mode is a per-run decision - it is deliberately not
+        # remembered - so it belongs where the run starts rather than three
+        # clicks deep. The dialog keeps its copy and its explanation; both
+        # drive the same variable, so either one moves the other.
+        self.private_box = tk.Checkbutton(
+            out, text=self.t("dlg_private"), variable=self.private_var,
+            bg=C["bg"], fg=C["dim"], font=self.f, selectcolor=C["panel"],
+            activebackground=C["bg"], activeforeground=C["green"],
+            highlightthickness=0, borderwidth=0, cursor="hand2")
+        self.private_box.pack(side="right")
 
         # --- results: list on the left, preview on the right ---------------
         wrap = tk.Frame(self.root, bg=C["bg"])
@@ -3224,6 +3234,11 @@ def ui_selftest():
         assert app.proxy_var.get() == was_proxy, "cancel kept the typed proxy"
         assert not [w for w in root.winfo_children()
                     if isinstance(w, tk.Toplevel)], "cancel left the dialog open"
+
+        # private mode is a per-run decision, so it is offered in the main bar
+        # as well as the dialog - and both have to drive the one variable
+        assert app.private_box.pack_info()["side"] == "right",             "the private box left the end of the row under the scan buttons"
+        assert str(app.private_box.cget("variable")) == str(app.private_var),             "the main bar has its own private flag, so the dialog cannot see it"
 
         # download is the primary action and reads as one: bigger than the
         # buttons around it, and present both above the list and below it

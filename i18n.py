@@ -50,6 +50,17 @@ STRINGS = {
                         "whatever address it arrives from.",
         "tor_missing": "tor is not running on 127.0.0.1:9050",
         "tor_private": "tor on :: private session on with it",
+        "cookies_off_private": "Off while the private session is on: it leaves\n"
+                               "the browser's cookies alone, so no site is told\n"
+                               "which account is asking.",
+        "proxy_ignored_tor": "Ignored while tor is on. Untick tor to use this\n"
+                             "address instead.",
+        "dlg_route": "test the route",
+        "route_checking": "asking...",
+        "route_none": "no route set :: the site sees your own address",
+        "route_tor": "tor :: the site sees {ip}",
+        "route_proxy": "a proxy, but not tor :: the site sees {ip}",
+        "route_failed": "the route did not answer :: {why}",
         "dlg_dblclick": "double click a row to download it",
         "dlg_dblclick_hint": "Off by default. The first click of the pair has\n"
                              "already marked the row, so an accidental double\n"
@@ -138,6 +149,17 @@ STRINGS = {
                         "είσαι από όποια διεύθυνση κι αν έρθει.",
         "tor_missing": "το tor δεν τρέχει στο 127.0.0.1:9050",
         "tor_private": "tor ενεργό :: μαζί και ιδιωτική συνεδρία",
+        "cookies_off_private": "Ανενεργά όσο τρέχει η ιδιωτική συνεδρία: δεν\n"
+                               "αγγίζει τα cookies του browser, οπότε κανένα\n"
+                               "site δεν μαθαίνει ποιος λογαριασμός ρωτάει.",
+        "proxy_ignored_tor": "Αγνοείται όσο το tor είναι αναμμένο. Σβήσε το tor\n"
+                             "για να χρησιμοποιηθεί αυτή η διεύθυνση.",
+        "dlg_route": "δοκιμή διαδρομής",
+        "route_checking": "ρωτάω...",
+        "route_none": "καμία διαδρομή :: το site βλέπει τη διεύθυνσή σου",
+        "route_tor": "tor :: το site βλέπει {ip}",
+        "route_proxy": "proxy, όχι tor :: το site βλέπει {ip}",
+        "route_failed": "η διαδρομή δεν απάντησε :: {why}",
         "dlg_dblclick": "διπλό κλικ σε γραμμή για λήψη",
         "dlg_dblclick_hint": "Ανενεργό εξ ορισμού. Το πρώτο κλικ έχει ήδη\n"
                              "μαρκάρει τη γραμμή, οπότε ένα κατά λάθος διπλό\n"

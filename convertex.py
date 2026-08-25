@@ -582,6 +582,11 @@ def human(n: int) -> str:
 # installed, which is not a question the window should be asking anybody.
 TOR_PORTS = (9050, 9150)
 
+# Tor's own service, which answers whether it sees you arriving over Tor. Used
+# by the button in settings, and by nothing else: it is the one question this
+# app cannot answer about itself.
+TOR_CHECK_URL = "https://check.torproject.org/api/ip"
+
 
 def tor_proxy(host: str = "127.0.0.1", ports: tuple[int, ...] = TOR_PORTS,
               timeout: float = 1.5) -> str | None:
@@ -1638,6 +1643,7 @@ class App:
         self.tor_var = tk.BooleanVar(value=False)
         self.tor_addr: str | None = None      # filled in when the box goes on
         self.tor_circuit = ""                 # rotates per scan and per download
+        self.route_label = None               # lives only while settings is open
         self.tor_var.trace_add("write", lambda *_: self.apply_tor())
         self.quality_var = tk.StringVar(value=self.prefs.get("quality", "best"))
         # StringVar, not IntVar: an IntVar raises TclError the moment it holds
@@ -1725,6 +1731,33 @@ class App:
 
     def workers(self) -> int:
         return clamp_int(self.parallel_var.get(), PARALLEL, 1, MAX_PARALLEL)
+
+    def check_route(self):
+        """Ask what the far end actually sees.
+
+        With no route set there is nothing to ask: the answer is known, and
+        putting the question to a service on the internet would mean handing
+        it your address for the privilege of being told your address.
+        """
+        proxy = self.proxy()
+        if not self.route_label or not self.route_label.winfo_exists():
+            return
+        if not proxy:
+            self.route_label.config(text=self.t("route_none"))
+            return
+        self.route_label.config(text=self.t("route_checking"))
+        threading.Thread(target=self._route_worker, args=(proxy,),
+                         daemon=True).start()
+
+    def _route_worker(self, proxy):
+        try:
+            seen = session_for(proxy).get(TOR_CHECK_URL, timeout=45).json()
+        except Exception as exc:
+            self.q.put(("route", self.t("route_failed", why=type(exc).__name__),
+                        None))
+            return
+        key = "route_tor" if seen.get("IsTor") else "route_proxy"
+        self.q.put(("route", self.t(key, ip=seen.get("IP") or "?"), None))
 
     def new_circuit(self):
         """Ask Tor for a fresh circuit for whatever is about to happen.
@@ -1840,9 +1873,14 @@ class App:
     # -- widget helpers ----------------------------------------------------
 
     def entry(self, parent, width=20, textvariable=None):
+        # disabledbackground is a system colour unless it is said out loud, so
+        # a box switched off - the proxy one, while tor is on - came out white
+        # in the middle of a dark window.
         e = tk.Entry(parent, bg=C["panel"], fg=C["fg"], font=self.f, width=width,
                      relief="flat", insertbackground=C["green"],
                      textvariable=textvariable,
+                     disabledbackground=C["panel"], disabledforeground=C["dim"],
+                     readonlybackground=C["panel"],
                      highlightthickness=1, highlightbackground=C["line"],
                      highlightcolor=C["green"], selectbackground=C["line"])
         return self.wire_entry(e)
@@ -2477,9 +2515,10 @@ class App:
                      anchor="w").pack(fill="x", padx=20, pady=(12, 3))
 
         def hint(text):
-            tk.Label(body, text=text, bg=C["bg"], fg=C["dim"], font=self.f,
-                     anchor="w", justify="left").pack(fill="x", padx=20,
-                                                      pady=(2, 0))
+            label = tk.Label(body, text=text, bg=C["bg"], fg=C["dim"],
+                             font=self.f, anchor="w", justify="left")
+            label.pack(fill="x", padx=20, pady=(2, 0))
+            return label
 
         # language ---------------------------------------------------------
         head(self.t("dlg_language"))
@@ -2501,9 +2540,20 @@ class App:
 
         # proxy ------------------------------------------------------------
         head(self.t("dlg_proxy"))
-        self.entry(body, width=46, textvariable=self.proxy_var).pack(
-            fill="x", padx=20, ipady=3)
-        hint(self.t("dlg_proxy_hint"))
+        proxy_entry = self.entry(body, width=46, textvariable=self.proxy_var)
+        proxy_entry.pack(fill="x", padx=20, ipady=3)
+        proxy_note = hint(self.t("dlg_proxy_hint"))
+
+        # Whether any of this is working is otherwise a matter of faith: the
+        # box is ticked, the requests go somewhere, and nothing on screen says
+        # where. One button, one answer, from Tor's own checking service.
+        route_row = tk.Frame(body, bg=C["bg"])
+        route_row.pack(fill="x", padx=20, pady=(6, 0))
+        self.button(route_row, self.t("dlg_route"), self.check_route,
+                    "cyan").pack(side="left")
+        self.route_label = tk.Label(route_row, text="", bg=C["bg"],
+                                    fg=C["dim"], font=self.f, anchor="w")
+        self.route_label.pack(side="left", padx=(10, 0))
 
         # quality ----------------------------------------------------------
         # Only reachable here because it only ever applies to playlists and to
@@ -2521,7 +2571,34 @@ class App:
                                   width=18, style="T.TCombobox", font=self.f,
                                   textvariable=self.cookies_var)
         cookie_box.pack(anchor="w", padx=20)
-        hint(self.t("dlg_cookies_hint"))
+        cookie_note = hint(self.t("dlg_cookies_hint"))
+
+        def sync(*_a):
+            """Grey out what is not in use, and say why.
+
+            The cookie box went on showing "firefox" while the private session
+            was quietly sending none, and the proxy box went on showing an
+            address that tor was overriding. Both were the window saying one
+            thing while the code did another.
+            """
+            private, tor = self.private_var.get(), self.tor_var.get()
+            cookie_box.configure(state="disabled" if private else "readonly")
+            cookie_note.configure(
+                text=self.t("cookies_off_private") if private
+                else self.t("dlg_cookies_hint"))
+            proxy_entry.configure(state="disabled" if tor else "normal")
+            proxy_note.configure(
+                text=self.t("proxy_ignored_tor") if tor
+                else self.t("dlg_proxy_hint"))
+
+        watched = [(var, var.trace_add("write", sync))
+                   for var in (self.private_var, self.tor_var)]
+        # The traces outlive the dialog otherwise, and fire against destroyed
+        # widgets the next time either box is ticked in the main bar.
+        win.bind("<Destroy>", lambda e: (
+            [var.trace_remove("write", name) for var, name in watched]
+            if e.widget is win else None), add="+")
+        sync()
 
         # metadata + attempts ----------------------------------------------
         head(self.t("dlg_strip"))
@@ -2937,6 +3014,9 @@ class App:
                         if token == self.preview_token:
                             self.show_thumb(img)
                         self.fill_dimensions(url, b)
+                elif kind == "route":
+                    if self.route_label and self.route_label.winfo_exists():
+                        self.route_label.config(text=a)
                 elif kind == "size":
                     index, size, token = a
                     rows = self.tree.get_children()
@@ -3575,6 +3655,41 @@ def ui_selftest():
             if b.cget("text") in (app.t("save"), app.t("cancel")):
                 bottom = b.winfo_rooty() + b.winfo_height()
                 assert bottom <= dlg[0].winfo_rooty() + dlg[0].winfo_height(),                     f"{b.cget('text')} sits below the dialog"
+        # the dialog must not show a setting that is not in force: the cookie
+        # box kept saying "firefox" while the private session sent none, and
+        # the proxy box kept an address tor was overriding
+        cookie_box = next(b for b in boxes
+                          if list(b.cget("values")) == list(COOKIE_BROWSERS))
+        proxy_entry = next(w for w in walk(dlg[0])
+                           if isinstance(w, tk.Entry)
+                           and str(w.cget("textvariable")) == str(app.proxy_var))
+        assert str(cookie_box.cget("state")) == "readonly"
+        app.private_var.set(True)
+        assert str(cookie_box.cget("state")) == "disabled",             "private mode was sending no cookies while the box still offered them"
+        app.private_var.set(False)
+        assert str(cookie_box.cget("state")) == "readonly"
+
+        keep_tor = tor_proxy
+        globals()["tor_proxy"] = lambda *a, **k: "socks5h://127.0.0.1:9050"
+        try:
+            assert str(proxy_entry.cget("state")) == "normal"
+            app.tor_var.set(True)
+            assert str(proxy_entry.cget("state")) == "disabled",                 "tor overrides the proxy box, so the box must not look live"
+            assert proxy_entry.cget("disabledbackground") == C["panel"],                 "a switched-off box must not go white in a dark window"
+            app.tor_var.set(False)
+            app.private_var.set(False)
+            assert str(proxy_entry.cget("state")) == "normal"
+        finally:
+            globals()["tor_proxy"] = keep_tor
+
+        # with no route at all the answer is known without asking anyone - and
+        # asking would mean handing an address over to be told the address
+        keep_proxy = app.proxy_var.get()
+        app.proxy_var.set("")
+        app.check_route()
+        assert app.route_label.cget("text") == app.t("route_none"),             app.route_label.cget("text")
+        app.proxy_var.set(keep_proxy)
+
         # cancel means cancel: every widget in there writes into the shared
         # variable, so what it has to undo is the values, not only the save
         was_quiet, was_proxy = app.quiet_var.get(), app.proxy_var.get()

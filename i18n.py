@@ -8,6 +8,8 @@ Adding a language means adding one dict below. Missing keys fall back to
 English rather than crashing, so a partial translation is usable.
 """
 
+import re
+
 # Only what is offered in the settings dropdown. STRINGS below still carries
 # the Spanish and German translations - putting either back in front of the
 # user is adding its code to this dict, nothing else.
@@ -288,6 +290,12 @@ STRINGS = {
 }
 
 
+# Words that start a line in lowercase because that is their name, not because
+# the sentence has not been capitalised yet.
+KEEP_LOWER = {"ffmpeg", "iphone", "macos"}
+_FIRST_WORD = re.compile(r"[\s:.,;()\[\]]")
+
+
 class Tr:
     """Translator. A missing key falls back to English, never to a crash."""
 
@@ -299,5 +307,22 @@ class Tr:
         self.table = STRINGS[self.lang]
 
     def __call__(self, key, **kw):
-        text = self.table.get(key) or STRINGS["en"].get(key) or key
-        return text.format(**kw) if kw else text
+        text = self.table.get(key) or STRINGS["en"].get(key)
+        if text is None:
+            return key          # a missing key shows its own name, untouched
+        if kw:
+            text = text.format(**kw)
+        # Sentence case, once, for every language: the strings are written in
+        # lowercase and the window wants a capital at the front. Only the first
+        # character is touched, so ALL CAPS headings and every name inside the
+        # line survive.
+        if not text[:1].islower():
+            return text
+        # A line that opens with something the world spells in lowercase is
+        # left alone: "socks5://..." and "yt-dlp" are not sentences, and
+        # "Socks5://" is a wrong address rather than a capitalised one. The
+        # digits and punctuation give most of them away; the rest are listed.
+        first = _FIRST_WORD.split(text, 1)[0]
+        if not first.isalpha() or first in KEEP_LOWER:
+            return text
+        return text[0].upper() + text[1:]

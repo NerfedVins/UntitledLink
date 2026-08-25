@@ -2870,6 +2870,11 @@ def selftest():
     assert tr("found", n=3) != _strings["en"]["found"], "greek must differ"
     assert tr("unknown_key_xyz") == "unknown_key_xyz", "missing key must not crash"
     assert _Tr("klingon").lang == "en", "unknown language falls back"
+    # the window shows sentence case, whatever the dicts are written in
+    assert _Tr("en")("scan") == "Scan" and _Tr("en")("col_size") == "SIZE"
+    assert _Tr("el")("dlg_ffmpeg") == "ffmpeg", "a name keeps its own spelling"
+    assert _Tr("el")("dlg_proxy_hint").startswith("socks5://"), "not a sentence"
+    assert _Tr("en")("browse") == "...", "nothing to capitalise"
 
     info = {"formats": [
         {"format_id": "a", "vcodec": "none", "acodec": "mp4a", "abr": 128, "filesize": 1000},

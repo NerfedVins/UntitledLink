@@ -25,14 +25,10 @@ import webbrowser
 from tkinter import filedialog, font as tkfont, messagebox, ttk
 from urllib.parse import urljoin, urlparse, unquote
 
-import requests
-from bs4 import BeautifulSoup
-from PIL import ImageFile
 
 # Pillow is only ever handed partial data here - previews are capped and the
 # dimension probe reads a header-sized slice on purpose - so refusing truncated
 # input would reject exactly the cases this app creates deliberately.
-ImageFile.LOAD_TRUNCATED_IMAGES = True
 
 from i18n import COOKIE_BROWSERS, LANGUAGES, NO_COOKIES, Tr
 
@@ -172,6 +168,31 @@ def _writable(path: str) -> bool:
         return True
     except OSError:
         return False
+
+
+def pillow():
+    """Pillow's Image, with the truncated-image flag set.
+
+    requests, bs4 and Pillow together cost about half a second to import, and
+    none of them is needed to put a window on screen - the first scan is the
+    earliest any of them matters. They are imported where they are used, and
+    warmed on a thread once the window is up, so the wait lands in neither
+    place. LOAD_TRUNCATED_IMAGES rides along here because it has to be set
+    before anything opens a half-downloaded preview.
+    """
+    from PIL import Image, ImageFile
+    ImageFile.LOAD_TRUNCATED_IMAGES = True
+    return Image
+
+
+def warm_imports() -> None:
+    """Pull the heavy imports in behind the window, not in front of it."""
+    try:
+        import requests            # noqa: F401
+        import bs4                 # noqa: F401
+        pillow()
+    except Exception:
+        pass                       # the real import will report it properly
 
 
 def _data_dir() -> str:
@@ -344,6 +365,7 @@ def update_ytdlp(log, proxy: str | None = None) -> None:
     """
     if getattr(sys, "frozen", False):
         return
+    import requests
     import subprocess
     have = installed_version("yt-dlp")
 
@@ -687,6 +709,7 @@ def with_circuit(proxy: str, tag: str) -> str:
 
 
 def session_for(proxy: str | None) -> requests.Session:
+    import requests
     s = requests.Session()
     s.headers.update({"User-Agent": user_agent(),
                       "Accept-Language": accept_language()})
@@ -795,6 +818,7 @@ def image_dimensions(s: requests.Session, url: str) -> str:
     an empty cell beats a wrong one.
     """
     import io
+    import requests
     try:
         r = s.get(url, timeout=15, stream=True,
                   headers={"Range": f"bytes=0-{IMAGE_HEADER_BYTES - 1}"})
@@ -817,6 +841,7 @@ def image_dimensions(s: requests.Session, url: str) -> str:
 
 def head(s: requests.Session, url: str) -> tuple[int, str]:
     """(content-length, content-type). (0, "") when the URL is not reachable."""
+    import requests
     try:
         r = s.head(url, timeout=12, allow_redirects=True)
         if r.status_code >= 400:  # plenty of CDNs refuse HEAD
@@ -924,6 +949,7 @@ def scrape_page(url: str, proxy: str | None, log, embeds: bool = True,
 
     # Bounded read: BeautifulSoup sniffs the encoding out of the bytes itself,
     # and r.text would happily pull a runaway response into memory first.
+    from bs4 import BeautifulSoup
     soup = BeautifulSoup(r.raw.read(MAX_HTML_BYTES, decode_content=True),
                          "html.parser")
     found: dict[str, str] = {}
@@ -1180,6 +1206,7 @@ def _syndication_token(tweet: str) -> str:
 
 def twitter_media(url: str, proxy: str | None, log) -> tuple[list[Item], str]:
     """Photos and videos from a public tweet. Returns (items, reason-if-empty)."""
+    import requests
     tweet = tweet_id(url)
     if not tweet:
         return [], ""
@@ -1696,6 +1723,11 @@ class App:
         root.protocol("WM_DELETE_WINDOW", self.close)
         self.tick = root.after(80, self.pump)
         self.ytdlp_checked = False   # the update rides along with the first scan
+        # After the window is drawn, not during: started here it competed with
+        # the build for the interpreter and cost more than it saved - measured
+        # at 1129ms to a window against 967ms before it existed at all.
+        root.after(250, lambda: threading.Thread(target=warm_imports,
+                                                 daemon=True).start())
         if not ffmpeg_path():
             # Nothing to click and nothing to download: ffmpeg rides in with the
             # dependencies. Missing it means the pip install did not finish, and
@@ -2402,8 +2434,9 @@ class App:
 
     def _thumb_worker(self, url, real_url, token, proxy):
         try:
-            from PIL import Image, ImageTk  # noqa: F401  (imported for the main thread)
+            from PIL import ImageTk  # noqa: F401  (imported for the main thread)
             import io
+            Image = pillow()
             session = session_for(proxy)
             r = session.get(url, timeout=20, stream=True)
             r.raise_for_status()
@@ -3405,6 +3438,7 @@ def selftest():
 
         def get(self, url, **kw):
             if self.version is None:
+                import requests
                 raise requests.ConnectionError("no route")
             return type("R", (), {
                 "json": lambda _s, v=self.version: {"info": {"version": v}}})()

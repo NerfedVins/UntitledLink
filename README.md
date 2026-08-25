@@ -7,6 +7,15 @@ Paste a link, see what is downloadable, take it clean.
 Double-click **`Convertex.vbs`**. It installs anything missing and opens the
 app. Nothing else to set up.
 
+**It starts in about half the time it used to.** requests, bs4 and Pillow cost
+roughly half a second to import between them and none of them is needed to put
+a window on screen, so they are imported where they are used and warmed on a
+thread once the window is drawn - after the first paint rather than during it,
+which was measured making things worse. The launcher does its own stamp check
+in VBScript rather than starting a python to compare two dates. Time from
+double-click to a window on screen: about 850ms, against 1.6s at its best
+before.
+
 **Nothing but the app appears.** `Convertex.vbs` runs the launcher with no
 console at all, and the app itself is started with `pythonw`, the console-less
 python. `run.bat` does the same work and still works, but Windows insists on

@@ -1,38 +1,21 @@
 @echo off
 cd /d "%~dp0"
 
-REM Three ways in:
-REM   (no argument) a double click. Hands straight over to Convertex.vbs,
-REM                 which runs this file again with no console. Windows still
-REM                 shows this one for the second it takes to start cmd, which
-REM                 is why Convertex.vbs is the one to double-click.
-REM   quiet         the everyday launch. Checks the stamp file and starts the
-REM                 app. Says 2 and stops if anything needs installing, since
-REM                 there is no console here to install it in front of.
+REM Two ways in:
+REM   (no argument) a double click. Hands straight over to Convertex.vbs, which
+REM                 does the everyday launch with no console at all. Windows
+REM                 still shows this one for the second it takes to start cmd,
+REM                 which is why Convertex.vbs is the one to double-click.
 REM   setup         the first run, or after an edit to requirements.txt. Runs
-REM                 pip where it can be watched, then starts the app.
+REM                 pip where it can be watched, then starts the app. This is
+REM                 also where Convertex.vbs sends anyone whose stamp file is
+REM                 stale, or whose pythonw it could not start.
 
-if "%~1"=="quiet" goto :quiet
 if "%~1"=="setup" goto :setup
 if exist "%~dp0Convertex.vbs" (
     start "" wscript //nologo "%~dp0Convertex.vbs"
     exit /b 0
 )
-goto :setup
-
-:quiet
-REM Only the stamp file is checked here, and only against requirements.txt:
-REM importing the five packages to be sure costs the best part of two seconds
-REM of console on every single launch. If something was uninstalled behind our
-REM back the app fails on its own imports and shows its crash dialog, which is
-REM the same answer two seconds later.
-where pythonw >nul 2>&1
-if errorlevel 1 exit /b 2
-if not exist ".deps-ok" exit /b 2
-python -c "import os,sys; sys.exit(0 if os.path.getmtime('.deps-ok') >= os.path.getmtime('requirements.txt') else 1)" >nul 2>&1
-if errorlevel 1 exit /b 2
-start "" pythonw convertex.py
-exit /b 0
 
 :setup
 where python >nul 2>&1
@@ -69,9 +52,6 @@ REM pythonw is the console-less python: it launches the window and nothing
 REM else, so this box closes instead of sitting behind the app all session.
 REM A crash before the window appears has no console to print to, so the app
 REM writes crash.log beside itself and shows the error in a dialog.
-REM
-REM yt-dlp refreshes itself from inside the app now, on a background thread,
-REM which is what the "Updating yt-dlp..." line here used to be for.
 where pythonw >nul 2>&1
 if errorlevel 1 goto :no_pythonw
 start "" pythonw convertex.py

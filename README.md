@@ -326,6 +326,21 @@ Measured over the real network, against archive.org: a page scan in 12s, a
 requests. Please respect our robot policy`, which is the shape of the day you
 should expect - YouTube and Cloudflare do the same, harder.
 
+**It says it is a Tor Browser while tor is on.** A Chrome-on-Windows user
+agent arriving from an exit node is a combination nobody else has - it
+announces a scraper using Tor, and it is what Wikimedia answered with its
+robot policy. Every Tor Browser on the same platform sends the same string,
+which is the point: the crowd is the cover. The Accept-Language header goes
+with it, since sending Tor Browser's identity and Chrome's language settings
+would be a costume with a name tag on it.
+
+The version comes off the installed bundle rather than being invented, and
+`TOR_FIREFOX` in the source needs bumping when Tor Browser moves to the next
+Firefox ESR - a stale version there is its own small fingerprint.
+
+Off tor the browser string stays, because plenty of sites refuse anything that
+does not look like a browser.
+
 **Cookies are the hole none of this closes.** A login says who you are whatever
 address it arrives from, so the hint line says `tor (cookies name you)` while
 both are on. The private session turns cookies off, and the two belong together.

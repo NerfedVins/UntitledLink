@@ -42,6 +42,36 @@ VERSION = "0.1.0"
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")
 
+# What the Tor Browser says it is, sent while the tor switch is on.
+#
+# A Chrome-on-Windows string arriving from a Tor exit node is a combination
+# nobody else has: it says "a scraper is using Tor" as clearly as a signature
+# would, and it is what Wikimedia answered with its robot policy. Every Tor
+# Browser on the same platform sends exactly this instead, which is the point -
+# the crowd is the cover.
+#
+# Read off the installed bundle rather than invented: Tor Browser 15.0.20
+# reports Firefox 140.14.0 in application.ini and resistFingerprinting rounds
+# that to the ESR major. Bump TOR_FIREFOX when Tor Browser moves to the next
+# ESR; a stale version here is its own small fingerprint.
+TOR_FIREFOX = "140.0"
+TOR_UA = (f"Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:{TOR_FIREFOX}) "
+          f"Gecko/20100101 Firefox/{TOR_FIREFOX}")
+
+# Set by the tor switch. A module-level flag for the same reason PRIVATE is
+# one: the network helpers are plain functions, called from threads that never
+# see the window.
+TOR_MODE = False
+
+
+def user_agent() -> str:
+    return TOR_UA if TOR_MODE else UA
+
+
+def accept_language() -> str:
+    """Tor Browser sends q=0.5, so an app claiming to be one has to as well."""
+    return "en-US,en;q=0.5" if TOR_MODE else "en-US,en;q=0.9"
+
 FILE_EXT = {
     "image": ".jpg .jpeg .png .gif .webp .bmp .avif .tiff",
     "video": ".mp4 .webm .mkv .mov .avi .m4v",
@@ -658,7 +688,8 @@ def with_circuit(proxy: str, tag: str) -> str:
 
 def session_for(proxy: str | None) -> requests.Session:
     s = requests.Session()
-    s.headers.update({"User-Agent": UA, "Accept-Language": "en-US,en;q=0.9"})
+    s.headers.update({"User-Agent": user_agent(),
+                      "Accept-Language": accept_language()})
     if proxy:
         s.proxies = {"http": proxy, "https": proxy}
     return s
@@ -1223,7 +1254,8 @@ def scan_media(url: str, proxy: str | None, log,
     opts = {
         "quiet": True, "no_warnings": True, "skip_download": True,
         "cachedir": False, "noprogress": True, "extract_flat": "in_playlist",
-        "http_headers": {"User-Agent": UA}, "logger": _Hush(), "no_color": True,
+        "http_headers": {"User-Agent": user_agent()},
+        "logger": _Hush(), "no_color": True,
         # without this a site that accepts the connection and then says nothing
         # holds the scan open for as long as it likes
         "socket_timeout": SOCKET_TIMEOUT,
@@ -1549,7 +1581,7 @@ def download_media(it: Item, outdir: str, proxy: str | None, quality: str,
         "continuedl": True, "retries": 5, "fragment_retries": 5,
         "socket_timeout": SOCKET_TIMEOUT,
         "writeinfojson": False, "writethumbnail": False, "writesubtitles": False,
-        "http_headers": {"User-Agent": UA},
+        "http_headers": {"User-Agent": user_agent()},
         "progress_hooks": [hook],
     }
     if proxy:
@@ -1685,12 +1717,15 @@ class App:
         self.refresh_hint()
 
     def apply_tor(self):
+        # Kept in step with the switch, below, once the address is known.
         """Tick the box and every request goes through Tor - if Tor is there.
 
         Nothing else in the window can tell you it is not: the scan would just
         fail, once per row, with a connection error that names a port. So the
         box refuses to stay on rather than promising something it cannot do.
         """
+        global TOR_MODE
+        TOR_MODE = bool(self.tor_var.get())
         if self.tor_var.get():
             self.tor_addr = tor_proxy()
             if not self.tor_addr:
@@ -3289,6 +3324,24 @@ def selftest():
     finally:
         globals()["session_for"] = keep_session_for
 
+    # over tor the app says it is a Tor Browser, because a Chrome arriving
+    # from an exit node is a combination nobody else has
+    global TOR_MODE
+    assert "Chrome" in user_agent() and "Firefox" not in user_agent()
+    assert session_for(None).headers["Accept-Language"] == "en-US,en;q=0.9"
+    TOR_MODE = True
+    try:
+        assert user_agent() == TOR_UA and "Chrome" not in user_agent()
+        assert f"rv:{TOR_FIREFOX}" in TOR_UA and f"Firefox/{TOR_FIREFOX}" in TOR_UA
+        # the headers go out together or the disguise is a costume with a name
+        # tag: Tor Browser sends q=0.5, so this has to as well
+        sent = session_for(None).headers
+        assert sent["User-Agent"] == TOR_UA
+        assert sent["Accept-Language"] == "en-US,en;q=0.5"
+    finally:
+        TOR_MODE = False
+    assert "Chrome" in user_agent(), "the switch did not switch back"
+
     # the proxy box: a bare host:port is a socks proxy, junk is nothing, and
     # socks5 becomes socks5h so the name is resolved at the far end
     assert normalise_proxy("127.0.0.1:9050") == "socks5h://127.0.0.1:9050"
@@ -3766,6 +3819,7 @@ def ui_selftest():
             assert with_circuit(fake_tor, "") == fake_tor, "no tag, no change"
             # an anonymous route with the session written to disk is half a job
             assert app.private_var.get(), "tor did not bring the private session"
+            assert TOR_MODE and user_agent() == TOR_UA,                 "the switch did not reach the headers the threads send"
             # brought on, not held on
             app.private_var.set(False)
             assert not app.private_var.get(), "private mode could not be turned off"
@@ -3775,6 +3829,7 @@ def ui_selftest():
             assert "cookies name you" in app.settings_hint.cget("text"),                 "a login over tor is worth a word"
             app.cookies_var.set(NO_COOKIES)
             app.tor_var.set(False)
+            assert not TOR_MODE and user_agent() == UA,                 "tor off and the app still claims to be a Tor Browser"
         finally:
             globals()["tor_proxy"] = keep_ready
 

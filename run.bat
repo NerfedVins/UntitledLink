@@ -2,9 +2,10 @@
 cd /d "%~dp0"
 
 REM Three ways in:
-REM   (no argument) a double click. Hands straight over to run.vbs, which runs
-REM                 this file again with no console, so the app window is the
-REM                 only thing that opens.
+REM   (no argument) a double click. Hands straight over to Convertex.vbs,
+REM                 which runs this file again with no console. Windows still
+REM                 shows this one for the second it takes to start cmd, which
+REM                 is why Convertex.vbs is the one to double-click.
 REM   quiet         the everyday launch. Checks the stamp file and starts the
 REM                 app. Says 2 and stops if anything needs installing, since
 REM                 there is no console here to install it in front of.
@@ -13,8 +14,8 @@ REM                 pip where it can be watched, then starts the app.
 
 if "%~1"=="quiet" goto :quiet
 if "%~1"=="setup" goto :setup
-if exist "%~dp0run.vbs" (
-    start "" wscript //nologo "%~dp0run.vbs"
+if exist "%~dp0Convertex.vbs" (
+    start "" wscript //nologo "%~dp0Convertex.vbs"
     exit /b 0
 )
 goto :setup

@@ -4,13 +4,18 @@ Paste a link, see what is downloadable, take it clean.
 
 ## Run
 
-Double-click **`run.bat`**. It installs anything missing and opens the app.
-Nothing else to set up.
+Double-click **`Convertex.vbs`**. It installs anything missing and opens the
+app. Nothing else to set up.
 
-**No console window sticks around.** The app is launched with `pythonw`, the
-console-less python, and `run.bat` closes as soon as it has done so. A terminal
-only appears if a dependency is actually missing, and only for as long as the
-install takes.
+**Nothing but the app appears.** `Convertex.vbs` runs the launcher with no
+console at all, and the app itself is started with `pythonw`, the console-less
+python. `run.bat` does the same work and still works, but Windows insists on
+showing a console for the second it takes to start any batch file, which is the
+one thing a .bat cannot be trimmed out of.
+
+A terminal appears on purpose in one case: something needs installing. That is
+worth watching, so the quiet launcher re-runs the batch in a real console where
+pip can say what it is doing.
 
 yt-dlp refreshes itself from inside the app, on a background thread, with no
 window of its own - it breaks whenever a site changes its markup, so a copy that

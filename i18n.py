@@ -76,6 +76,7 @@ STRINGS = {
                          "app carries, since sites hand out vtt as often\n"
                          "as srt. Beside the file rather than inside it,\n"
                          "so a text editor can open it.",
+        "have_already": "already here",
         "dlg_route": "test the route",
         "route_checking": "asking...",
         "route_none": "no route set :: the site sees your own address",
@@ -200,6 +201,7 @@ STRINGS = {
                          "που ήδη κουβαλάει η εφαρμογή, γιατί τα sites\n"
                          "δίνουν vtt το ίδιο συχνά. Δίπλα στο αρχείο, όχι\n"
                          "μέσα του, ώστε να ανοίγει με επεξεργαστή κειμένου.",
+        "have_already": "το έχεις ήδη",
         "dlg_route": "δοκιμή διαδρομής",
         "route_checking": "ρωτάω...",
         "route_none": "καμία διαδρομή :: το site βλέπει τη διεύθυνσή σου",

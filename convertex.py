@@ -1461,6 +1461,23 @@ def drop_part(it, outdir: str) -> None:
         pass
 
 
+def already_here(existing: set[str], it: Item) -> bool:
+    """Is this row's file already sitting in the download folder?
+
+    Nothing was ever said about it: unique_path quietly wrote "clip (2).mp4"
+    beside the clip you already had, and you found out by looking at the
+    folder afterwards.
+
+    A yt-dlp row cannot be matched exactly - its name is decided by a template
+    at download time, with the id and the extension filled in then - so the
+    title is matched as a prefix. A scraped row has its real filename already.
+    """
+    if it.via == "ytdlp":
+        stem = safe_name(it.name)[:40]
+        return bool(stem) and any(f.startswith(stem) for f in existing)
+    return safe_name(it.name) in existing
+
+
 def unique_path(path: str) -> str:
     if not os.path.exists(path):
         return path
@@ -2384,6 +2401,12 @@ class App:
     QUALITY_WORDS = {"as set": "q_as_set", "original": "q_original",
                      "audio": "q_audio"}
 
+    def info_cell(self, it: Item, here: set[str]) -> str:
+        """The INFO column, with a word when the file is already downloaded."""
+        if not already_here(here, it):
+            return it.info
+        return " :: ".join(b for b in (self.t("have_already"), it.info) if b)
+
     def quality_text(self, quality: str) -> str:
         key = self.QUALITY_WORDS.get(quality)
         return self.t(key) if key else quality
@@ -3165,6 +3188,13 @@ class App:
                             self.show_preview()
                 elif kind == "items":
                     self.items = a
+                    outdir = self.outdir_var.get().strip()
+                    try:
+                        # one listing for the whole batch rather than a stat
+                        # per row, and nothing asked of the network at all
+                        here = set(os.listdir(outdir)) if outdir else set()
+                    except OSError:
+                        here = set()
                     for it in a:
                         # kind doubles as the resolution label ("2160p"), so fall
                         # back to the generic media tag for colouring those rows
@@ -3174,7 +3204,8 @@ class App:
                                          values=(self.t("kind_" + it.kind),
                                                  self.quality_text(it.quality),
                                                  it.res, it.length,
-                                                 size_cell(it, False), it.info,
+                                                 size_cell(it, False),
+                                                 self.info_cell(it, here),
                                                  it.name))
                     self.show_source_line(a)
         except queue.Empty:
@@ -3422,6 +3453,19 @@ def selftest():
     assert subs["subtitleslangs"] == ["el", "en"], subs
     assert subs["writesubtitles"] and subs["writeautomaticsub"],         "a lecture often has only the machine transcript"
     assert "srt" in subs["subtitlesformat"], "a subtitle you can open and read"
+
+    # a file already in the download folder is worth saying so, since the
+    # alternative is finding "clip (2).mp4" there afterwards
+    folder = {"clip.mp4", "Lecture 3 [abc123].mp4"}
+    assert already_here(folder, Item("https://h/clip.mp4", "clip.mp4", "video"))
+    assert not already_here(folder, Item("https://h/other.mp4", "other.mp4", "video"))
+    # a yt-dlp row is named by a template at download time, so the title is
+    # matched as a prefix - the id and the extension are not known yet
+    assert already_here(folder, Item("https://h/w", "Lecture 3", "video",
+                                     via="ytdlp"))
+    assert not already_here(folder, Item("https://h/w", "Lecture 4", "video",
+                                         via="ytdlp"))
+    assert not already_here(set(), Item("https://h/clip.mp4", "clip.mp4", "video"))
 
     # the proxy box: a bare host:port is a socks proxy, junk is nothing, and
     # socks5 becomes socks5h so the name is resolved at the far end
@@ -3815,6 +3859,14 @@ def ui_selftest():
             if b.cget("text") in (app.t("save"), app.t("cancel")):
                 bottom = b.winfo_rooty() + b.winfo_height()
                 assert bottom <= dlg[0].winfo_rooty() + dlg[0].winfo_height(),                     f"{b.cget('text')} sits below the dialog"
+        # a file already in the folder is said so in the INFO column, since
+        # the alternative is finding "clip (2).mp4" there afterwards
+        have = {safe_name("clip.mp4")}
+        marked = app.info_cell(Item("https://h/clip.mp4", "clip.mp4", "video"), have)
+        assert app.t("have_already") in marked, marked
+        assert app.info_cell(Item("https://h/new.mp4", "new.mp4", "video"),
+                             have) == "", "a file not there must not be marked"
+
         # thirteen settings in one column read as a list to get through, so
         # they sit under the question they answer
         labels = {str(w.cget("text")) for w in walk(dlg[0])

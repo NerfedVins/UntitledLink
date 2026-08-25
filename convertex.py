@@ -3428,6 +3428,17 @@ def selftest():
     finally:
         globals()["session_for"] = keep_session_for
 
+    # SOCKS support is imported by name the moment a socks5h:// proxy is
+    # used, which nothing static can see: a build without PySocks answers
+    # "Missing dependencies for SOCKS support" the first time the tor box is
+    # ticked. A dead port is enough to tell the two apart - the wrong answer
+    # arrives before any connection is attempted.
+    try:
+        session_for("socks5h://127.0.0.1:1").get("https://example.invalid",
+                                                 timeout=2)
+    except Exception as exc:
+        assert "SOCKS" not in str(exc) or "Missing dependencies" not in str(exc),             f"this build cannot use tor at all :: {exc}"
+
     # over tor the app says it is a Tor Browser, because a Chrome arriving
     # from an exit node is a combination nobody else has
     global TOR_MODE
@@ -3535,15 +3546,26 @@ def selftest():
             return type("R", (), {
                 "json": lambda _s, v=self.version: {"info": {"version": v}}})()
 
-    globals()["session_for"] = lambda proxy=None: _Answer(None)
-    update_ytdlp(lambda m, *a, **k: said.append(str(m)))
-    assert said and "not checked" in said[-1],         f"an unreachable index must not read as up to date: {said}"
+    # A frozen build carries its own yt-dlp and cannot pip into itself, so
+    # update_ytdlp turns round at the door and this said nothing at all - which
+    # failed the run inside the exe, where a selftest is worth the most.
+    frozen = getattr(sys, "frozen", False)
+    sys.frozen = False
+    try:
+        globals()["session_for"] = lambda proxy=None: _Answer(None)
+        update_ytdlp(lambda m, *a, **k: said.append(str(m)))
+        assert said and "not checked" in said[-1],             f"an unreachable index must not read as up to date: {said}"
 
-    globals()["session_for"] = lambda proxy=None: _Answer(real)
-    said.clear()
-    update_ytdlp(lambda m, *a, **k: said.append(str(m)))
-    assert said and said[-1] == f"yt-dlp up to date ({real})", said
-    globals()["session_for"] = keep_session
+        globals()["session_for"] = lambda proxy=None: _Answer(real)
+        said.clear()
+        update_ytdlp(lambda m, *a, **k: said.append(str(m)))
+        assert said and said[-1] == f"yt-dlp up to date ({real})", said
+    finally:
+        globals()["session_for"] = keep_session
+        if frozen:
+            sys.frozen = frozen
+        else:
+            del sys.frozen
 
     from i18n import LANGUAGES as _langs, STRINGS as _strings, Tr as _Tr
     base = set(_strings["en"])

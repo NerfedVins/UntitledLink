@@ -613,7 +613,8 @@ def head(s: requests.Session, url: str) -> tuple[int, str]:
         return 0, ""
 
 
-def probe_all(items: list[Item], s: requests.Session) -> list[Item]:
+def probe_all(items: list[Item], s: requests.Session,
+              workers: int = PARALLEL) -> list[Item]:
     """HEAD every item. For images also try higher-res variants and keep the
     biggest one that actually exists. Drops anything that answers with HTML -
     a link ending in .ogg can still be a wiki page about an .ogg."""
@@ -631,9 +632,10 @@ def probe_all(items: list[Item], s: requests.Session) -> list[Item]:
         return it
 
     # Most scrapes are one host, so the worker count is the per-host cap in
-    # practice. Twelve HEADs at once is what trips the rate limiter HOST_LIMIT
-    # exists to stay under; six probes fast enough.
-    with ThreadPoolExecutor(max_workers=6) as pool:
+    # practice - which makes it the same question the download setting already
+    # answers, so it uses that rather than a hard-coded six. Set it to 1 and the
+    # probes leave one at a time, which is what a small site wants to see.
+    with ThreadPoolExecutor(max_workers=workers) as pool:
         probed = [it for it in pool.map(probe, items) if it]
     # two thumbnails can resolve to the same original, so dedupe after upgrading
     return list({it.url: it for it in probed}.values())
@@ -687,7 +689,8 @@ def embed_urls(soup, base: str) -> list[str]:
     return out
 
 
-def scrape_page(url: str, proxy: str | None, log, embeds: bool = True) -> list[Item]:
+def scrape_page(url: str, proxy: str | None, log, embeds: bool = True,
+                workers: int = PARALLEL) -> list[Item]:
     s = session_for(proxy)
     # streamed so the body can be read in a bounded slice below
     r = s.get(url, timeout=25, stream=True)
@@ -721,7 +724,7 @@ def scrape_page(url: str, proxy: str | None, log, embeds: bool = True) -> list[I
 
     log(f"{len(found)} candidates, probing sizes and full-res variants...")
     items = probe_all([Item(u, name_from_url(u), k, thumb=u if k == "image" else None)
-                       for u, k in found.items()], s)
+                       for u, k in found.items()], s, workers)
     items.sort(key=lambda i: (i.kind, -i.size))
 
     # Embedded video goes on top: on a page that has one, it is usually the
@@ -1107,7 +1110,8 @@ def is_media_host(url: str) -> bool:
 
 
 def scan(url: str, proxy: str | None, log, cookies: str = "",
-         no_video_msg: str = "", cookies_msg: str = "") -> list[Item]:
+         no_video_msg: str = "", cookies_msg: str = "",
+         workers: int = PARALLEL) -> list[Item]:
     log("asking yt-dlp...")
     items, err = scan_media(url, proxy, log, cookies)
     if items:
@@ -1120,7 +1124,8 @@ def scan(url: str, proxy: str | None, log, cookies: str = "",
             # Media hosts are left alone: scraping one of those returns avatars
             # and interface icons, which is why they are excluded by name.
             try:
-                items = items + scrape_page(url, proxy, log, embeds=False)
+                items = items + scrape_page(url, proxy, log, embeds=False,
+                                            workers=workers)
             except Exception as exc:
                 log(f"the page itself would not scrape :: {exc}")
         return items
@@ -1146,7 +1151,7 @@ def scan(url: str, proxy: str | None, log, cookies: str = "",
         raise RuntimeError(" :: ".join(p for p in parts if p))
 
     log("not a known media site - scraping the page...")
-    return scrape_page(url, proxy, log)
+    return scrape_page(url, proxy, log, workers=workers)
 
 
 # --------------------------------------------------------------------------
@@ -2336,7 +2341,7 @@ class App:
             items = scan(url, self.proxy_var.get().strip() or None, self.say,
                          self.cookies(),
                          self.t("no_video", site=urlparse(url).netloc),
-                         self.t("try_cookies"))
+                         self.t("try_cookies"), self.workers())
             if token != self.scan_token:
                 self.log(f"scan finished after being stopped, result dropped "
                          f":: {url}", "warn")
@@ -2597,6 +2602,27 @@ def selftest():
     wiki = "https://upload.wikimedia.org/wikipedia/commons/thumb/a/ab/Cat.jpg/500px-Cat.jpg"
     assert "https://upload.wikimedia.org/wikipedia/commons/a/ab/Cat.jpg" in upgrade_image(wiki)
     assert best_from_srcset("a.jpg 300w, b.jpg 900w", "https://x.com/") == "https://x.com/b.jpg"
+
+    # the probe pool obeys the download setting instead of a hard-coded six, so
+    # a site never sees more parallel HEADs than the user asked for
+    live, peak, guard = [0], [0], threading.Lock()
+
+    class _CountingSession:
+        def head(self, url, **kw):
+            with guard:
+                live[0] += 1
+                peak[0] = max(peak[0], live[0])
+            time.sleep(0.02)
+            with guard:
+                live[0] -= 1
+            return type("R", (), {"status_code": 200,
+                                  "headers": {"content-length": "1",
+                                              "content-type": "video/mp4"}})()
+
+    probed = probe_all([Item(f"https://h/{n}.mp4", f"{n}.mp4", "video")
+                        for n in range(8)], _CountingSession(), workers=2)
+    assert len(probed) == 8 and peak[0] <= 2, f"{peak[0]} probes at once, asked for 2"
+
     assert kind_of("https://x.com/p/photo.WEBP") == "image"
     assert kind_of("https://x.com/page") is None
     assert name_from_url("https://x.com/a/b%20c.png?z=1") == "b c.png"

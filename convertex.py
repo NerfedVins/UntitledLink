@@ -247,13 +247,15 @@ def quiet_run(cmd: list[str], **kw):
     return subprocess.run(cmd, **hidden, **kw)
 
 
-def update_ytdlp(log) -> None:
+def update_ytdlp(log, proxy: str | None = None) -> None:
     """Refresh yt-dlp quietly, in the background.
 
     It breaks whenever a site changes its markup, so the copy that worked last
-    week may not work today - which is why this runs every launch rather than
-    waiting for a scan to fail. run.bat used to do it and needed a console
-    window to do it in; CREATE_NO_WINDOW means nothing flashes up here.
+    week may not work today. It runs on the first scan rather than at launch,
+    and through whatever route that scan is using: at launch it was the one
+    connection that ignored the proxy, so a session meant to go entirely
+    through Tor started by telling PyPI, in the clear, that this machine had
+    just opened the app.
 
     The new version applies at the next launch: yt-dlp is already imported by
     the time a scan happens, and swapping the files under it would not change
@@ -263,10 +265,12 @@ def update_ytdlp(log) -> None:
         return
     import subprocess
     try:
-        done = quiet_run(
-            [sys.executable, "-m", "pip", "install", "--upgrade", "-q",
-             "--disable-pip-version-check", "yt-dlp"],
-            capture_output=True, text=True, timeout=180)
+        cmd = [sys.executable, "-m", "pip", "install", "--upgrade", "-q",
+               "--disable-pip-version-check"]
+        if proxy:
+            cmd += ["--proxy", proxy]
+        done = quiet_run(cmd + ["yt-dlp"], capture_output=True, text=True,
+                         timeout=180)
     except (OSError, subprocess.SubprocessError) as exc:
         log(f"yt-dlp update skipped :: {exc}", "warn")
         return
@@ -527,6 +531,24 @@ def tor_proxy(host: str = "127.0.0.1", ports: tuple[int, ...] = TOR_PORTS,
         except OSError:
             continue
     return None
+
+
+def with_circuit(proxy: str, tag: str) -> str:
+    """The same Tor, asked for a circuit of its own.
+
+    Tor hands a separate circuit to each SOCKS username/password it is given -
+    IsolateSOCKSAuth, which is on by default. Without it every scan and every
+    download in a session leaves by the same exit node, which can see that one
+    client looked at this, then that, then fetched the other. A tag per action
+    breaks the thread between them.
+
+    Anything that is not Tor is handed back untouched: a VPN endpoint has no
+    idea what to do with credentials it never asked for.
+    """
+    if not tag or not proxy.startswith(("socks5://", "socks5h://")) or "@" in proxy:
+        return proxy
+    scheme, host = proxy.split("://", 1)
+    return f"{scheme}://{tag}:x@{host}"
 
 
 def session_for(proxy: str | None) -> requests.Session:
@@ -1515,6 +1537,7 @@ class App:
         # ticked last week is a scan that fails for a reason nobody remembers.
         self.tor_var = tk.BooleanVar(value=False)
         self.tor_addr: str | None = None      # filled in when the box goes on
+        self.tor_circuit = ""                 # rotates per scan and per download
         self.tor_var.trace_add("write", lambda *_: self.apply_tor())
         self.quality_var = tk.StringVar(value=self.prefs.get("quality", "best"))
         # StringVar, not IntVar: an IntVar raises TclError the moment it holds
@@ -1534,7 +1557,7 @@ class App:
         self.build()
         root.protocol("WM_DELETE_WINDOW", self.close)
         self.tick = root.after(80, self.pump)
-        threading.Thread(target=update_ytdlp, args=(self.log,), daemon=True).start()
+        self.ytdlp_checked = False   # the update rides along with the first scan
         if not ffmpeg_path():
             # Nothing to click and nothing to download: ffmpeg rides in with the
             # dependencies. Missing it means the pip install did not finish, and
@@ -1600,6 +1623,15 @@ class App:
     def workers(self) -> int:
         return clamp_int(self.parallel_var.get(), PARALLEL, 1, MAX_PARALLEL)
 
+    def new_circuit(self):
+        """Ask Tor for a fresh circuit for whatever is about to happen.
+
+        Called when a scan starts and when a download starts, so the two are
+        not visibly the same client to whoever is carrying them.
+        """
+        import secrets
+        self.tor_circuit = secrets.token_hex(8)
+
     def proxy(self) -> str | None:
         """Where every request goes out: Tor when it is on, otherwise whatever
         is typed in settings, otherwise straight out.
@@ -1609,7 +1641,7 @@ class App:
         download, and the answer does not move while the app is open.
         """
         if self.tor_var.get() and self.tor_addr:
-            return self.tor_addr
+            return with_circuit(self.tor_addr, self.tor_circuit)
         return self.proxy_var.get().strip() or None
 
     def cookies(self) -> str:
@@ -2565,6 +2597,7 @@ class App:
             self.url.insert(0, url)
         self.set_busy(True)
         self.scanning = True
+        self.new_circuit()
         self.scan_token += 1
         self.tree.delete(*self.tree.get_children())
         self.items = []
@@ -2576,6 +2609,13 @@ class App:
 
     def _scan_worker(self, url, token):
         self.log(f"scan {url}")
+        if not self.ytdlp_checked:
+            # Deliberately here rather than at launch: this way it goes out the
+            # same way the scan does, and only once somebody is actually
+            # scanning something.
+            self.ytdlp_checked = True
+            threading.Thread(target=update_ytdlp, args=(self.log, self.proxy()),
+                             daemon=True).start()
         try:
             items = scan(url, self.proxy(), self.say,
                          self.cookies(),
@@ -2622,6 +2662,9 @@ class App:
         os.makedirs(outdir, exist_ok=True)
         self.remember()
         self.set_busy(True)
+        # A download on its own circuit is not the same client as the scan that
+        # found it, as far as whoever is carrying the traffic can tell.
+        self.new_circuit()
         self.stop_btn.pack(side="left", padx=(6, 0))
         threading.Thread(
             target=self._dl_worker,
@@ -3395,7 +3438,16 @@ def ui_selftest():
             assert not app.private_var.get()
             app.tor_var.set(True)
             assert app.tor_var.get(), "tor was on and available, so it stays on"
-            assert app.proxy() == fake_tor, "tor wins over the typed proxy"
+            assert app.proxy() == fake_tor,                 "with no circuit asked for yet, the address is used as it is"
+            # one circuit per action: the tag Tor isolates on has to change
+            app.new_circuit()
+            first = app.proxy()
+            app.new_circuit()
+            second = app.proxy()
+            assert first != second, "every scan left by the same circuit"
+            assert first.startswith("socks5h://") and "@127.0.0.1:9150" in first, first
+            assert with_circuit("http://vpn.example:8080", "abc") ==                 "http://vpn.example:8080", "only tor knows what to do with these"
+            assert with_circuit(fake_tor, "") == fake_tor, "no tag, no change"
             # an anonymous route with the session written to disk is half a job
             assert app.private_var.get(), "tor did not bring the private session"
             # brought on, not held on

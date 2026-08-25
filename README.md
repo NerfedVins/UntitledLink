@@ -292,8 +292,24 @@ The address used is `socks5h://`, and the `h` is the part that matters: without
 it the hostname is resolved here first, so the traffic leaves through Tor while
 your provider has already been told which site you are about to visit.
 
+**A circuit per action.** Tor gives a separate circuit to each SOCKS
+username/password it is handed, so a random tag is generated when a scan starts
+and again when a download starts. Without it every scan and every download in a
+session leaves by the same exit node, which then knows one client looked at
+this, then that, then fetched the other. Measured over the real network: three
+tags, three different exit addresses.
+
+**The yt-dlp update goes out the same way.** It used to run at launch, which
+made it the one connection that ignored the proxy - a session meant to go
+entirely through Tor began by telling PyPI in the clear that this machine had
+opened the app. It now runs on the first scan, through that scan's route.
+
+Ticking tor turns the private session on with it, and leaves it switchable:
+hiding the address while the settings file is being written is half a job.
+
 The **proxy box** still takes anything else - a VPN endpoint, a company proxy.
-Tor wins over it while the box is ticked.
+Tor wins over it while the box is ticked, and the circuit tag is only added for
+Tor, since nothing else knows what to do with credentials it never asked for.
 
 Measured over the real network, against archive.org: a page scan in 12s, a
 3 MB download at 557 KB/s. Wikimedia answered a Tor exit with `403 Too many

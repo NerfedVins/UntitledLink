@@ -1708,6 +1708,14 @@ class App:
                 # may want their settings remembered and only the route hidden.
                 self.private_var.set(True)
                 self.say(self.t("tor_private"), C["green"])
+            elif not self.quiet_var.get():
+                # Only when there was no private-session message to show: two
+                # status lines in a row means seeing the second one only.
+                self.say(self.t("tor_slow_scan"), C["amber"])
+            if not self.quiet_var.get():
+                self.log("tor: every request costs seconds now - the discreet "
+                         "scan asks the site once per page instead of once per "
+                         "link", "info")
         self.refresh_hint()
 
     def remember(self):
@@ -2457,20 +2465,21 @@ class App:
             # Worth saying plainly: private mode keeps this machine clean, it
             # does not hide the download from the other end. Only a proxy does
             # anything about the address the site sees.
-            bits.append("private" if self.proxy()
-                        else "private (no proxy - your IP still shows)")
+            bits.append(self.t("chip_private" if self.proxy()
+                               else "chip_private_bare"))
         if self.tor_var.get():
             # Cookies say who you are, which is the one thing an anonymous
             # route cannot take back. Worth saying while both are on.
-            bits.append("tor (cookies name you)" if self.cookies() else "tor")
-        elif self.proxy_var.get().strip():
-            bits.append("proxy")
+            bits.append(self.t("chip_tor_cookies" if self.cookies()
+                               else "chip_tor"))
+        elif normalise_proxy(self.proxy_var.get()):
+            bits.append(self.t("chip_proxy"))
         if self.cookies():
-            bits.append(f"cookies:{self.cookies()}")
+            bits.append(self.t("chip_cookies", name=self.cookies()))
         if self.clean_var.get():
-            bits.append("strip")
+            bits.append(self.t("chip_strip"))
         if not ffmpeg_path():
-            bits.append("no ffmpeg")
+            bits.append(self.t("chip_no_ffmpeg"))
         self.settings_hint.config(text="  ".join(bits))
 
     def open_settings(self):
@@ -3367,6 +3376,10 @@ def selftest():
     assert _Tr("el")("dlg_ffmpeg") == "ffmpeg", "a name keeps its own spelling"
     assert _Tr("el")("dlg_proxy_hint").startswith("socks5://"), "not a sentence"
     assert _Tr("en")("browse") == "...", "nothing to capitalise"
+    # the status line above the results is UI, not a log line, so it follows
+    # the window's language too
+    for _key in ("chip_private", "chip_strip", "chip_no_ffmpeg"):
+        assert _Tr("el")(_key) != _Tr("en")(_key), f"{_key} was left in English"
 
     info = {"formats": [
         {"format_id": "a", "vcodec": "none", "acodec": "mp4a", "abr": 128, "filesize": 1000},
@@ -3810,13 +3823,16 @@ def ui_selftest():
         app.remember()
         assert not os.path.exists(probe), "private mode wrote a settings file"
         hint_now = app.settings_hint.cget("text")
-        assert "private" in hint_now, hint_now
-        # and it says so when there is no proxy, because that is the half it
-        # cannot do anything about
-        assert "no proxy" in hint_now, hint_now
+        # the line is written in the window's language like everything else,
+        # so it is compared against the translation rather than an English word
+        assert app.t("chip_private_bare") in hint_now, hint_now
+        # it says so when there is no proxy, because that is the half private
+        # mode cannot do anything about
         app.proxy_var.set("socks5://127.0.0.1:9050")
         app.refresh_hint()
-        assert "no proxy" not in app.settings_hint.cget("text")
+        hint_now = app.settings_hint.cget("text")
+        assert app.t("chip_private") in hint_now, hint_now
+        assert app.t("chip_private_bare") not in hint_now, hint_now
 
         app.private_var.set(False)
         app.proxy_var.set("")

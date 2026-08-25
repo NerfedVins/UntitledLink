@@ -1,6 +1,39 @@
 @echo off
 cd /d "%~dp0"
 
+REM Three ways in:
+REM   (no argument) a double click. Hands straight over to run.vbs, which runs
+REM                 this file again with no console, so the app window is the
+REM                 only thing that opens.
+REM   quiet         the everyday launch. Checks the stamp file and starts the
+REM                 app. Says 2 and stops if anything needs installing, since
+REM                 there is no console here to install it in front of.
+REM   setup         the first run, or after an edit to requirements.txt. Runs
+REM                 pip where it can be watched, then starts the app.
+
+if "%~1"=="quiet" goto :quiet
+if "%~1"=="setup" goto :setup
+if exist "%~dp0run.vbs" (
+    start "" wscript //nologo "%~dp0run.vbs"
+    exit /b 0
+)
+goto :setup
+
+:quiet
+REM Only the stamp file is checked here, and only against requirements.txt:
+REM importing the five packages to be sure costs the best part of two seconds
+REM of console on every single launch. If something was uninstalled behind our
+REM back the app fails on its own imports and shows its crash dialog, which is
+REM the same answer two seconds later.
+where pythonw >nul 2>&1
+if errorlevel 1 exit /b 2
+if not exist ".deps-ok" exit /b 2
+python -c "import os,sys; sys.exit(0 if os.path.getmtime('.deps-ok') >= os.path.getmtime('requirements.txt') else 1)" >nul 2>&1
+if errorlevel 1 exit /b 2
+start "" pythonw convertex.py
+exit /b 0
+
+:setup
 where python >nul 2>&1
 if errorlevel 1 (
     echo Python not found on PATH. Install it from python.org and tick "Add to PATH".
@@ -12,9 +45,7 @@ REM Two questions, because an import check alone answers only the first:
 REM   1. is everything importable at all?
 REM   2. is what is installed still what requirements.txt asks for?
 REM (2) matters because the floors in requirements.txt are invisible to an
-REM import - an ancient Pillow imports perfectly well. Comparing the stamp
-REM file against requirements.txt catches an edited requirements file without
-REM running pip on every single launch, which would cost a second for nothing.
+REM import - an ancient Pillow imports perfectly well.
 set NEED=0
 python -c "import bs4, requests, yt_dlp, PIL, imageio_ffmpeg" >nul 2>&1
 if errorlevel 1 set NEED=1

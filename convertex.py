@@ -2523,21 +2523,27 @@ class App:
             tk.Label(body, text=text, bg=C["bg"], fg=C["green"], font=self.fb,
                      anchor="w").pack(fill="x", padx=20, pady=(12, 3))
 
+        def section(title):
+            """A heading with a rule above it.
+
+            Thirteen settings in one column read as a list to get through. They
+            fall into three questions - where a download goes, who gets to know
+            about it, and how the window behaves - and the ones that answer the
+            same question now sit together.
+            """
+            tk.Frame(body, bg=C["line"], height=1).pack(
+                fill="x", padx=20, pady=(18, 0))
+            tk.Label(body, text=title.upper(), bg=C["bg"], fg=C["cyan"],
+                     font=self.fb, anchor="w").pack(fill="x", padx=20,
+                                                    pady=(8, 2))
+
         def hint(text):
             label = tk.Label(body, text=text, bg=C["bg"], fg=C["dim"],
                              font=self.f, anchor="w", justify="left")
             label.pack(fill="x", padx=20, pady=(2, 0))
             return label
 
-        # language ---------------------------------------------------------
-        head(self.t("dlg_language"))
-        names = list(LANGUAGES.values())
-        lang_box = ttk.Combobox(body, values=names, state="readonly", width=18,
-                                style="T.TCombobox", font=self.f)
-        lang_box.set(LANGUAGES[self.t.lang])
-        lang_box.pack(anchor="w", padx=20)
-        hint(self.t("dlg_lang_note"))
-
+        section(self.t("sec_download"))
         # download folder --------------------------------------------------
         head(self.t("save_to"))
         folder = tk.Frame(body, bg=C["bg"])
@@ -2546,6 +2552,53 @@ class App:
             side="left", fill="x", expand=True, ipady=3)
         self.button(folder, self.t("browse"), self.pick_dir,
                     "cyan").pack(side="left", padx=(6, 0))
+
+        # quality ----------------------------------------------------------
+        # Only reachable here because it only ever applies to playlists and to
+        # pages that hand over no format list. Anywhere the scan could read the
+        # formats, every resolution is its own row and this is ignored.
+        head(self.t("quality"))
+        ttk.Combobox(body, values=list(FORMATS), state="readonly", width=18,
+                     style="T.TCombobox", font=self.f,
+                     textvariable=self.quality_var).pack(anchor="w", padx=20)
+        hint(self.t("dlg_quality_hint"))
+
+        head(self.t("dlg_parallel"))
+        tk.Spinbox(body, from_=1, to=MAX_PARALLEL, width=5,
+                   textvariable=self.parallel_var,
+                   bg=C["panel"], fg=C["fg"], font=self.f, relief="flat",
+                   buttonbackground=C["line"], insertbackground=C["green"],
+                   highlightthickness=1,
+                   highlightbackground=C["line"]).pack(anchor="w", padx=20)
+        hint(self.t("dlg_parallel_hint"))
+
+        head(self.t("dlg_attempts"))
+        tk.Spinbox(body, from_=1, to=10, width=5, textvariable=self.attempts_var,
+                   bg=C["panel"], fg=C["fg"], font=self.f, relief="flat",
+                   buttonbackground=C["line"], insertbackground=C["green"],
+                   highlightthickness=1,
+                   highlightbackground=C["line"]).pack(anchor="w", padx=20)
+
+        head(self.t("dlg_ffmpeg"))
+        ff = ffmpeg_path()
+        tk.Label(body, text=ff or self.t("dlg_ffmpeg_missing"), bg=C["bg"],
+                 fg=C["fg"] if ff else C["amber"], font=self.f, anchor="w",
+                 wraplength=420, justify="left").pack(fill="x", padx=20)
+
+        section(self.t("sec_privacy"))
+        tk.Checkbutton(body, text=self.t("dlg_tor"), variable=self.tor_var,
+                       bg=C["bg"], fg=C["fg"], font=self.fb, selectcolor=C["panel"],
+                       activebackground=C["bg"], activeforeground=C["green"],
+                       highlightthickness=0, borderwidth=0,
+                       cursor="hand2", anchor="w").pack(fill="x", padx=20)
+        hint(self.t("dlg_tor_hint"))
+
+        tk.Checkbutton(body, text=self.t("dlg_private"), variable=self.private_var,
+                       bg=C["bg"], fg=C["fg"], font=self.fb, selectcolor=C["panel"],
+                       activebackground=C["bg"], activeforeground=C["green"],
+                       highlightthickness=0, borderwidth=0,
+                       cursor="hand2", anchor="w").pack(fill="x", padx=20)
+        hint(self.t("dlg_private_hint"))
 
         # proxy ------------------------------------------------------------
         head(self.t("dlg_proxy"))
@@ -2563,16 +2616,6 @@ class App:
         self.route_label = tk.Label(route_row, text="", bg=C["bg"],
                                     fg=C["dim"], font=self.f, anchor="w")
         self.route_label.pack(side="left", padx=(10, 0))
-
-        # quality ----------------------------------------------------------
-        # Only reachable here because it only ever applies to playlists and to
-        # pages that hand over no format list. Anywhere the scan could read the
-        # formats, every resolution is its own row and this is ignored.
-        head(self.t("quality"))
-        ttk.Combobox(body, values=list(FORMATS), state="readonly", width=18,
-                     style="T.TCombobox", font=self.f,
-                     textvariable=self.quality_var).pack(anchor="w", padx=20)
-        hint(self.t("dlg_quality_hint"))
 
         # cookies ----------------------------------------------------------
         head(self.t("dlg_cookies"))
@@ -2609,68 +2652,37 @@ class App:
             if e.widget is win else None), add="+")
         sync()
 
-        # metadata + attempts ----------------------------------------------
-        head(self.t("dlg_strip"))
-        tk.Checkbutton(body, text=self.t("dlg_strip"), variable=self.clean_var,
-                       bg=C["bg"], fg=C["fg"], font=self.f, selectcolor=C["panel"],
-                       activebackground=C["bg"], activeforeground=C["green"],
-                       highlightthickness=0, borderwidth=0,
-                       cursor="hand2", anchor="w").pack(fill="x", padx=20)
-        hint(self.t("dlg_strip_hint"))
-
-        head(self.t("dlg_private"))
-        tk.Checkbutton(body, text=self.t("dlg_private"), variable=self.private_var,
-                       bg=C["bg"], fg=C["fg"], font=self.f, selectcolor=C["panel"],
-                       activebackground=C["bg"], activeforeground=C["green"],
-                       highlightthickness=0, borderwidth=0,
-                       cursor="hand2", anchor="w").pack(fill="x", padx=20)
-        hint(self.t("dlg_private_hint"))
-
-        head(self.t("dlg_tor"))
-        tk.Checkbutton(body, text=self.t("dlg_tor"), variable=self.tor_var,
-                       bg=C["bg"], fg=C["fg"], font=self.f, selectcolor=C["panel"],
-                       activebackground=C["bg"], activeforeground=C["green"],
-                       highlightthickness=0, borderwidth=0,
-                       cursor="hand2", anchor="w").pack(fill="x", padx=20)
-        hint(self.t("dlg_tor_hint"))
-
-        head(self.t("dlg_dblclick"))
-        tk.Checkbutton(body, text=self.t("dlg_dblclick"), variable=self.dblclick_var,
-                       bg=C["bg"], fg=C["fg"], font=self.f, selectcolor=C["panel"],
-                       activebackground=C["bg"], activeforeground=C["green"],
-                       highlightthickness=0, borderwidth=0,
-                       cursor="hand2", anchor="w").pack(fill="x", padx=20)
-        hint(self.t("dlg_dblclick_hint"))
-
-        head(self.t("dlg_quiet"))
         tk.Checkbutton(body, text=self.t("dlg_quiet"), variable=self.quiet_var,
-                       bg=C["bg"], fg=C["fg"], font=self.f, selectcolor=C["panel"],
+                       bg=C["bg"], fg=C["fg"], font=self.fb, selectcolor=C["panel"],
                        activebackground=C["bg"], activeforeground=C["green"],
                        highlightthickness=0, borderwidth=0,
                        cursor="hand2", anchor="w").pack(fill="x", padx=20)
         hint(self.t("dlg_quiet_hint"))
 
-        head(self.t("dlg_parallel"))
-        tk.Spinbox(body, from_=1, to=MAX_PARALLEL, width=5,
-                   textvariable=self.parallel_var,
-                   bg=C["panel"], fg=C["fg"], font=self.f, relief="flat",
-                   buttonbackground=C["line"], insertbackground=C["green"],
-                   highlightthickness=1,
-                   highlightbackground=C["line"]).pack(anchor="w", padx=20)
-        hint(self.t("dlg_parallel_hint"))
+        # metadata + attempts ----------------------------------------------
+        tk.Checkbutton(body, text=self.t("dlg_strip"), variable=self.clean_var,
+                       bg=C["bg"], fg=C["fg"], font=self.fb, selectcolor=C["panel"],
+                       activebackground=C["bg"], activeforeground=C["green"],
+                       highlightthickness=0, borderwidth=0,
+                       cursor="hand2", anchor="w").pack(fill="x", padx=20)
+        hint(self.t("dlg_strip_hint"))
 
-        head(self.t("dlg_attempts"))
-        tk.Spinbox(body, from_=1, to=10, width=5, textvariable=self.attempts_var,
-                   bg=C["panel"], fg=C["fg"], font=self.f, relief="flat",
-                   buttonbackground=C["line"], insertbackground=C["green"],
-                   highlightthickness=1,
-                   highlightbackground=C["line"]).pack(anchor="w", padx=20)
+        section(self.t("sec_window"))
+        # language ---------------------------------------------------------
+        head(self.t("dlg_language"))
+        names = list(LANGUAGES.values())
+        lang_box = ttk.Combobox(body, values=names, state="readonly", width=18,
+                                style="T.TCombobox", font=self.f)
+        lang_box.set(LANGUAGES[self.t.lang])
+        lang_box.pack(anchor="w", padx=20)
+        hint(self.t("dlg_lang_note"))
 
-        head(self.t("dlg_ffmpeg"))
-        ff = ffmpeg_path()
-        tk.Label(body, text=ff or self.t("dlg_ffmpeg_missing"), bg=C["bg"],
-                 fg=C["fg"] if ff else C["amber"], font=self.f, anchor="w",
-                 wraplength=420, justify="left").pack(fill="x", padx=20)
+        tk.Checkbutton(body, text=self.t("dlg_dblclick"), variable=self.dblclick_var,
+                       bg=C["bg"], fg=C["fg"], font=self.fb, selectcolor=C["panel"],
+                       activebackground=C["bg"], activeforeground=C["green"],
+                       highlightthickness=0, borderwidth=0,
+                       cursor="hand2", anchor="w").pack(fill="x", padx=20)
+        hint(self.t("dlg_dblclick_hint"))
 
         # buttons ----------------------------------------------------------
         # Every widget above writes straight into the shared variable, so
@@ -3668,6 +3680,15 @@ def ui_selftest():
             if b.cget("text") in (app.t("save"), app.t("cancel")):
                 bottom = b.winfo_rooty() + b.winfo_height()
                 assert bottom <= dlg[0].winfo_rooty() + dlg[0].winfo_height(),                     f"{b.cget('text')} sits below the dialog"
+        # thirteen settings in one column read as a list to get through, so
+        # they sit under the question they answer
+        labels = {str(w.cget("text")) for w in walk(dlg[0])
+                  if isinstance(w, tk.Label)}
+        for _key in ("sec_download", "sec_privacy", "sec_window"):
+            assert app.t(_key).upper() in labels, f"{_key} section missing"
+        # and a checkbox says what it is once, not twice
+        assert app.t("dlg_tor") not in labels,             "the checkbox label is doubled by a heading above it"
+
         # the dialog must not show a setting that is not in force: the cookie
         # box kept saying "firefox" while the private session sent none, and
         # the proxy box kept an address tor was overriding

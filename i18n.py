@@ -67,6 +67,15 @@ STRINGS = {
         "sec_download": "downloading",
         "sec_privacy": "privacy",
         "sec_window": "the window",
+        "dlg_subs": "subtitles too, when there are any",
+        "dlg_subs_hint": "Off by default. Saves the subtitles beside the\n"
+                         "video in the window's language, then English -\n"
+                         "both the written ones and the machine\n"
+                         "transcript, since a lecture often has only the\n"
+                         "second. As .srt, converted by the ffmpeg this\n"
+                         "app carries, since sites hand out vtt as often\n"
+                         "as srt. Beside the file rather than inside it,\n"
+                         "so a text editor can open it.",
         "dlg_route": "test the route",
         "route_checking": "asking...",
         "route_none": "no route set :: the site sees your own address",
@@ -182,6 +191,15 @@ STRINGS = {
         "sec_download": "λήψη",
         "sec_privacy": "ιδιωτικότητα",
         "sec_window": "το παράθυρο",
+        "dlg_subs": "και υπότιτλοι, όπου υπάρχουν",
+        "dlg_subs_hint": "Ανενεργό εξ ορισμού. Αποθηκεύει τους υπότιτλους\n"
+                         "δίπλα στο βίντεο, στη γλώσσα του παραθύρου και\n"
+                         "μετά στα αγγλικά - και τους γραμμένους και την\n"
+                         "αυτόματη απομαγνητοφώνηση, αφού μια διάλεξη\n"
+                         "συχνά έχει μόνο τη δεύτερη. Σε .srt, με το ffmpeg\n"
+                         "που ήδη κουβαλάει η εφαρμογή, γιατί τα sites\n"
+                         "δίνουν vtt το ίδιο συχνά. Δίπλα στο αρχείο, όχι\n"
+                         "μέσα του, ώστε να ανοίγει με επεξεργαστή κειμένου.",
         "dlg_route": "δοκιμή διαδρομής",
         "route_checking": "ρωτάω...",
         "route_none": "καμία διαδρομή :: το site βλέπει τη διεύθυνσή σου",

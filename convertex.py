@@ -1573,8 +1573,27 @@ def download_file(it: Item, outdir: str, proxy: str | None, clean: bool,
     return dest
 
 
+def subtitle_opts(lang: str, wanted: bool) -> dict:
+    """yt-dlp options for subtitles, or nothing at all.
+
+    Both the written ones and the machine transcript: a lecture or a seminar
+    often has only the second, and getting nothing back for a video that
+    visibly has captions reads as a broken setting rather than a choice.
+
+    The window's language first, then English. Anything else that exists is
+    left where it is - all of them would mean twenty files beside one video.
+    They land as .srt next to it rather than muxed in, which needs no ffmpeg
+    and leaves a file a text editor can open.
+    """
+    if not wanted:
+        return {}
+    return {"writesubtitles": True, "writeautomaticsub": True,
+            "subtitleslangs": [lang, "en"], "subtitlesformat": "srt/vtt/best"}
+
+
 def download_media(it: Item, outdir: str, proxy: str | None, quality: str,
-                   clean: bool, progress, cookies: str = "") -> str:
+                   clean: bool, progress, cookies: str = "",
+                   subs: str = "") -> str:
     from yt_dlp import YoutubeDL
 
     ff = ffmpeg_path()
@@ -1607,20 +1626,28 @@ def download_media(it: Item, outdir: str, proxy: str | None, quality: str,
         "cachedir": False, "noplaylist": True,
         "continuedl": True, "retries": 5, "fragment_retries": 5,
         "socket_timeout": SOCKET_TIMEOUT,
-        "writeinfojson": False, "writethumbnail": False, "writesubtitles": False,
+        "writeinfojson": False, "writethumbnail": False,
         "http_headers": {"User-Agent": user_agent()},
         "progress_hooks": [hook],
     }
+    opts.update(subtitle_opts(subs, bool(subs)))
     if proxy:
         opts["proxy"] = proxy
     if cookies:
         opts["cookiesfrombrowser"] = (cookies,)
     if ff:
         opts["ffmpeg_location"] = ff
+        if subs:
+            # The format selector only picks among what the site offers, and
+            # Wikimedia offers vtt - measured. srt is the one every player and
+            # every text editor understands, and converting needs the ffmpeg
+            # this app already carries.
+            opts.setdefault("postprocessors", []).append(
+                {"key": "FFmpegSubtitlesConvertor", "format": "srt"})
         if want_mp3:
-            opts["postprocessors"] = [{"key": "FFmpegExtractAudio",
-                                       "preferredcodec": "mp3",
-                                       "preferredquality": MP3_BITRATE}]
+            opts.setdefault("postprocessors", []).append(
+                {"key": "FFmpegExtractAudio", "preferredcodec": "mp3",
+                 "preferredquality": MP3_BITRATE})
         else:
             opts["merge_output_format"] = "mp4"
             if clean:
@@ -1694,6 +1721,10 @@ class App:
         # look - one HEAD per row you open. The full scan is what to switch on
         # when sizes to sort by are worth a request per link.
         self.quiet_var = tk.BooleanVar(value=bool(self.prefs.get("quiet_scan", True)))
+        # Off by default: it is another file per download, and most downloads
+        # are not lectures. On, it is the only part of a video that a text
+        # search can reach.
+        self.subs_var = tk.BooleanVar(value=bool(self.prefs.get("subtitles", False)))
         self.private_var = tk.BooleanVar(value=False)
         self.private_var.trace_add("write", lambda *_: self.apply_private())
         # Not remembered either, and for a plainer reason than private mode:
@@ -1797,6 +1828,7 @@ class App:
             "cookies": self.cookies(),
             "double_click_downloads": bool(self.dblclick_var.get()),
             "quiet_scan": bool(self.quiet_var.get()),
+            "subtitles": bool(self.subs_var.get()),
             "attempts": self.attempts(),
             "parallel": self.workers(),
         })
@@ -2631,6 +2663,13 @@ class App:
                      textvariable=self.quality_var).pack(anchor="w", padx=20)
         hint(self.t("dlg_quality_hint"))
 
+        tk.Checkbutton(body, text=self.t("dlg_subs"), variable=self.subs_var,
+                       bg=C["bg"], fg=C["fg"], font=self.fb, selectcolor=C["panel"],
+                       activebackground=C["bg"], activeforeground=C["green"],
+                       highlightthickness=0, borderwidth=0,
+                       cursor="hand2", anchor="w").pack(fill="x", padx=20)
+        hint(self.t("dlg_subs_hint"))
+
         head(self.t("dlg_parallel"))
         tk.Spinbox(body, from_=1, to=MAX_PARALLEL, width=5,
                    textvariable=self.parallel_var,
@@ -2760,7 +2799,7 @@ class App:
         touched = (self.outdir_var, self.proxy_var, self.quality_var,
                    self.cookies_var, self.clean_var, self.private_var,
                    self.tor_var, self.dblclick_var, self.quiet_var,
-                   self.parallel_var, self.attempts_var)
+                   self.subs_var, self.parallel_var, self.attempts_var)
         before = [v.get() for v in touched]
 
         def cancel():
@@ -2939,11 +2978,12 @@ class App:
             target=self._dl_worker,
             args=(picks, outdir, self.proxy(),
                   self.quality_var.get(), self.clean_var.get(),
-                  self.cookies(), self.workers(), self.attempts()),
+                  self.cookies(), self.workers(), self.attempts(),
+                  self.t.lang if self.subs_var.get() else ""),
             daemon=True).start()
 
     def _dl_worker(self, picks, outdir, proxy, quality, clean, cookies="",
-                   workers=PARALLEL, tries=ATTEMPTS):
+                   workers=PARALLEL, tries=ATTEMPTS, subs=""):
         from concurrent.futures import ThreadPoolExecutor
 
         total_items = len(picks)
@@ -3007,7 +3047,7 @@ class App:
                     try:
                         if it.via == "ytdlp":
                             download_media(it, outdir, proxy, quality, clean,
-                                           progress, cookies)
+                                           progress, cookies, subs)
                         else:
                             with host_slot(it.url):
                                 download_file(it, outdir, proxy, clean, progress,
@@ -3374,6 +3414,14 @@ def selftest():
     finally:
         TOR_MODE = False
     assert "Chrome" in user_agent(), "the switch did not switch back"
+
+    # subtitles: nothing at all unless asked for, and then the window's
+    # language before English
+    assert subtitle_opts("el", False) == {}
+    subs = subtitle_opts("el", True)
+    assert subs["subtitleslangs"] == ["el", "en"], subs
+    assert subs["writesubtitles"] and subs["writeautomaticsub"],         "a lecture often has only the machine transcript"
+    assert "srt" in subs["subtitlesformat"], "a subtitle you can open and read"
 
     # the proxy box: a bare host:port is a socks proxy, junk is nothing, and
     # socks5 becomes socks5h so the name is resolved at the far end

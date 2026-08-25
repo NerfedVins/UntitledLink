@@ -17,12 +17,22 @@ A terminal appears on purpose in one case: something needs installing. That is
 worth watching, so the quiet launcher re-runs the batch in a real console where
 pip can say what it is doing.
 
-yt-dlp refreshes itself from inside the app, on a background thread, with no
-window of its own - it breaks whenever a site changes its markup, so a copy that
-worked last week may not work today. The new version applies at the next launch.
-Failure there is a line in the log, not an interruption: being offline is the
-usual reason and the installed copy still works for every site that has not
-changed.
+yt-dlp refreshes itself from inside the app, on the first scan rather than at
+launch - it breaks whenever a site changes its markup, so a copy that worked
+last week may not work today. Doing it on the first scan means it goes out by
+whatever route that scan uses, rather than being the one connection that
+ignored the proxy.
+
+PyPI is asked directly instead of leaving the question to pip, because pip
+cannot be made to answer it honestly: with the package already present and the
+index unreachable it prints "Requirement already satisfied" and exits 0, with
+no hint that it never got to look. So the log says `yt-dlp up to date (2026.8.19)`
+only when that was checked, and `yt-dlp not checked` when it could not be.
+
+**Nothing is left in the background.** Every process the app starts - pip,
+ffmpeg - is tracked and killed when the window closes, whether it closes
+normally or on the way out of a crash. Closing the window ends the session:
+one process while it runs, none after.
 
 Because `pythonw` has no console to print to, a crash before the window appears
 writes `crash.log` next to the app and shows the error in a dialog.

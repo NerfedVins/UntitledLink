@@ -15,6 +15,7 @@ import os
 import queue
 import re
 import shutil
+import subprocess
 import sys
 import threading
 import time
@@ -227,14 +228,25 @@ def ffmpeg_path() -> str | None:
     return shutil.which("ffmpeg")
 
 
-def quiet_run(cmd: list[str], **kw):
-    """subprocess.run with nothing on screen - grandchildren included.
+# Every child process this app has running. Nothing it starts is allowed to
+# outlive the window: a pip left behind by a closed app is exactly the thing
+# in the background that nobody asked for and nobody can see to stop.
+_CHILDREN: set = set()
+_CHILDREN_LOCK = threading.Lock()
+
+
+def quiet_run(cmd: list[str], capture_output: bool = False,
+              text: bool = False, timeout: float | None = None):
+    """subprocess.run with nothing on screen and nothing left behind.
 
     CREATE_NO_WINDOW keeps the process we start from opening a console, and
     says nothing about what that process starts in turn: pip launches cmd.exe,
     which got a console of its own and flashed one up two seconds after the app
     had appeared. A hidden STARTUPINFO is what those inherit, so it covers the
     part the flag cannot reach.
+
+    Popen rather than run(), only so the child can be found and killed when the
+    window closes - see stop_children().
     """
     import subprocess
     hidden = {}
@@ -244,7 +256,46 @@ def quiet_run(cmd: list[str], **kw):
         info.wShowWindow = subprocess.SW_HIDE
         hidden = {"startupinfo": info,
                   "creationflags": subprocess.CREATE_NO_WINDOW}
-    return subprocess.run(cmd, **hidden, **kw)
+    pipe = subprocess.PIPE if capture_output else None
+    proc = subprocess.Popen(cmd, stdout=pipe, stderr=pipe, text=text, **hidden)
+    with _CHILDREN_LOCK:
+        _CHILDREN.add(proc)
+    try:
+        out, err = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.communicate()
+        raise
+    finally:
+        with _CHILDREN_LOCK:
+            _CHILDREN.discard(proc)
+    return subprocess.CompletedProcess(cmd, proc.returncode, out, err)
+
+
+def stop_children() -> int:
+    """Kill anything this app started, and say how many there were.
+
+    Closing the window is meant to end the session, not hand parts of it to the
+    background: a pip mid-download or an ffmpeg mid-strip would otherwise carry
+    on with nothing on screen to show for it.
+    """
+    with _CHILDREN_LOCK:
+        live = [p for p in _CHILDREN if p.poll() is None]
+    for proc in live:
+        try:
+            proc.kill()
+        except OSError:
+            pass
+    return len(live)
+
+
+def installed_version(package: str) -> str:
+    """What is on disk right now, read fresh rather than from the import."""
+    try:
+        from importlib.metadata import version, PackageNotFoundError
+        return version(package)
+    except Exception:
+        return ""
 
 
 def update_ytdlp(log, proxy: str | None = None) -> None:
@@ -264,22 +315,42 @@ def update_ytdlp(log, proxy: str | None = None) -> None:
     if getattr(sys, "frozen", False):
         return
     import subprocess
+    have = installed_version("yt-dlp")
+
+    # PyPI is asked directly rather than left to pip, because pip cannot be
+    # made to tell the truth here: with the package already present and the
+    # index unreachable it prints "Requirement already satisfied" and exits 0,
+    # with no warning that it never got to look. That came back as "yt-dlp up
+    # to date" - a claim nobody had checked. This way an unanswered question
+    # reads as one, and pip is only started when there is something to install.
     try:
-        cmd = [sys.executable, "-m", "pip", "install", "--upgrade", "-q",
-               "--disable-pip-version-check"]
-        if proxy:
-            cmd += ["--proxy", proxy]
-        done = quiet_run(cmd + ["yt-dlp"], capture_output=True, text=True,
-                         timeout=180)
-    except (OSError, subprocess.SubprocessError) as exc:
-        log(f"yt-dlp update skipped :: {exc}", "warn")
+        latest = session_for(proxy).get(
+            "https://pypi.org/pypi/yt-dlp/json", timeout=30
+        ).json()["info"]["version"]
+    except (requests.RequestException, ValueError, KeyError, TypeError) as exc:
+        log(f"yt-dlp not checked ({have or 'version unknown'} in place) :: "
+            f"{type(exc).__name__}", "warn")
         return
-    if done.returncode:
-        # Offline is the usual reason and is not worth a red line - the copy
-        # already installed still works for every site that has not changed.
-        log("yt-dlp update skipped - offline, or pip refused", "warn")
+
+    if latest == have:
+        log(f"yt-dlp up to date ({have})")
+        return
+
+    log(f"yt-dlp {have or '?'} -> {latest}, updating")
+    cmd = [sys.executable, "-m", "pip", "install", "--upgrade", "-q",
+           "--disable-pip-version-check"]
+    if proxy:
+        cmd += ["--proxy", proxy]
+    try:
+        quiet_run(cmd + ["yt-dlp"], capture_output=True, text=True, timeout=180)
+    except (OSError, subprocess.SubprocessError) as exc:
+        log(f"yt-dlp update failed :: {exc}", "warn")
+        return
+    now = installed_version("yt-dlp")
+    if now == latest:
+        log(f"yt-dlp updated to {now} - applies at the next launch")
     else:
-        log("yt-dlp up to date", "info")
+        log(f"yt-dlp update did not take ({now or '?'} still in place)", "warn")
 
 
 # --------------------------------------------------------------------------
@@ -1567,6 +1638,9 @@ class App:
 
     def close(self):
         self.remember()
+        left = stop_children()
+        if left:
+            self.log(f"stopped {left} background process(es) on the way out")
         self.root.after_cancel(self.tick)  # otherwise pump fires post-destroy
         self.root.destroy()
 
@@ -3103,6 +3177,54 @@ def selftest():
     assert tor_proxy("127.0.0.1", (live_port,), timeout=0.5) is None,         "a closed port must read as down, not hang"
     assert TOR_PORTS == (9050, 9150), "the tor service, then the Tor Browser"
 
+    # nothing this app starts is allowed to outlive it
+    sleeper = [None]
+
+    def _run_sleeper():
+        try:
+            sleeper[0] = quiet_run([sys.executable, "-c",
+                                    "import time; time.sleep(30)"], timeout=40)
+        except Exception as exc:
+            sleeper[0] = exc
+
+    slow = threading.Thread(target=_run_sleeper, daemon=True)
+    slow.start()
+    for _ in range(50):                      # wait for it to actually be up
+        if _CHILDREN:
+            break
+        time.sleep(0.05)
+    assert _CHILDREN, "the child was never registered, so nothing can stop it"
+    started = time.monotonic()
+    assert stop_children() == 1, "the live child was not counted"
+    slow.join(timeout=10)
+    assert not slow.is_alive() and time.monotonic() - started < 10,         "closing the window left a process running"
+    assert not [p for p in _CHILDREN if p.poll() is None]
+
+    # the update says what it knows, and no more than that
+    said = []
+    keep_session = session_for
+    real = installed_version("yt-dlp")
+
+    class _Answer:
+        def __init__(self, version):
+            self.version = version
+
+        def get(self, url, **kw):
+            if self.version is None:
+                raise requests.ConnectionError("no route")
+            return type("R", (), {
+                "json": lambda _s, v=self.version: {"info": {"version": v}}})()
+
+    globals()["session_for"] = lambda proxy=None: _Answer(None)
+    update_ytdlp(lambda m, *a, **k: said.append(str(m)))
+    assert said and "not checked" in said[-1],         f"an unreachable index must not read as up to date: {said}"
+
+    globals()["session_for"] = lambda proxy=None: _Answer(real)
+    said.clear()
+    update_ytdlp(lambda m, *a, **k: said.append(str(m)))
+    assert said and said[-1] == f"yt-dlp up to date ({real})", said
+    globals()["session_for"] = keep_session
+
     from i18n import LANGUAGES as _langs, STRINGS as _strings, Tr as _Tr
     base = set(_strings["en"])
     for code in _langs:
@@ -3735,7 +3857,15 @@ def ui_selftest():
             assert len(root.tk.call("after", "info")) == pending, "rebuild leaked a timer"
         assert len(app.tree.get_children()) == 2, "results lost on language change"
 
+        # closing the window ends the session, background and all: a pip or an
+        # ffmpeg still running would carry on with nothing on screen to stop it
+        parked = subprocess.Popen([sys.executable, "-c",
+                                   "import time; time.sleep(30)"])
+        with _CHILDREN_LOCK:
+            _CHILDREN.add(parked)
+
         app.close()   # remember() must not raise on the way out
+        assert parked.wait(timeout=10) is not None, "close() left a child running"
         try:
             root.winfo_exists()
             raise AssertionError("close() left the window standing")
@@ -3775,6 +3905,9 @@ def main():
         except Exception:
             pass
         raise
+    finally:
+        # Even on the way out of a crash: whatever was running stops here.
+        stop_children()
 
 
 if __name__ == "__main__":

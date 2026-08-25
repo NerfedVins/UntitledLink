@@ -1559,13 +1559,22 @@ class App:
             # "big" is the same button with more presence, for download - the
             # thing every visit to this window is actually for.
             for prefix, size, pad_xy in (("", 10, (14, 5)), ("big", 12, (26, 9))):
+                # focusthickness=0 kills clam's dashed rectangle, which drew
+                # itself inside the button and read as a broken border rather
+                # than as focus. The focus state tints the whole button
+                # instead, so a keyboard user still sees where they are.
                 st.configure(f"{prefix}{accent}.T.TButton", background=C["panel"],
                              foreground=C[accent], font=(self.mono, size, "bold"),
                              borderwidth=0, relief="flat", padding=pad_xy,
-                             focuscolor=C[accent], anchor="center", width=0)
+                             focusthickness=0, anchor="center", width=0)
+                # Pressed inverts: the accent fills the button and the text
+                # goes dark. Hover and focus share the lighter panel, so the
+                # press is the one state that cannot be mistaken for another.
+                # First match wins, which is why pressed leads.
                 st.map(f"{prefix}{accent}.T.TButton",
-                       background=[("pressed", C["line"]), ("active", C["line"])],
-                       foreground=[("disabled", C["line"])])
+                       background=[("pressed", C[accent]), ("active", C["line"]),
+                                   ("focus", C["line"])],
+                       foreground=[("pressed", C["bg"]), ("disabled", C["line"])])
         st.configure("T.TCombobox", fieldbackground=C["panel"], background=C["panel"],
                      foreground=C["fg"], arrowcolor=C["dim"], bordercolor=C["line"],
                      selectbackground=C["panel"], selectforeground=C["fg"])
@@ -3239,6 +3248,15 @@ def ui_selftest():
         # as well as the dialog - and both have to drive the one variable
         assert app.private_box.pack_info()["side"] == "right",             "the private box left the end of the row under the scan buttons"
         assert str(app.private_box.cget("variable")) == str(app.private_var),             "the main bar has its own private flag, so the dialog cannot see it"
+
+        # a pressed button changes colour as a whole - the dashed rectangle
+        # clam drew inside it read as a broken border, not as a state
+        for accent in ("green", "dim"):
+            name = f"{accent}.T.TButton"
+            assert str(ttk.Style().lookup(name, "focusthickness")) == "0",                 f"{name} still draws the dashed focus ring"
+            assert ttk.Style().lookup(name, "background", ["pressed"]) == C[accent], name
+            assert ttk.Style().lookup(name, "foreground", ["pressed"]) == C["bg"], name
+            assert ttk.Style().lookup(name, "background", ["focus"]) == C["line"],                 "a keyboard user needs to see which button has focus"
 
         # download is the primary action and reads as one: bigger than the
         # buttons around it, and present both above the list and below it

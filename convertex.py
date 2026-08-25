@@ -1294,12 +1294,22 @@ def download_file(it: Item, outdir: str, proxy: str | None, clean: bool,
             r.raise_for_status()
             length = int(r.headers.get("content-length") or 0)
             mode, done, total = resume_plan(have, r.status_code, length)
+            # What the server promised for this response, as opposed to what
+            # the row happens to say. it.size can be stale or plain wrong, and
+            # a wrong figure here would fail a download that is actually whole.
+            promised = 0 if r.headers.get("content-encoding") else total
             total = total or it.size
             with open(part, mode) as fh:
                 for chunk in r.iter_content(262144):
                     fh.write(chunk)
                     done += len(chunk)
                     progress(done, total)  # raises Cancelled if pulled from the pool
+            # A connection that dies mid-file usually raises, but a server that
+            # closes cleanly after a short body does not - and renaming the
+            # .part would turn half a file into a finished-looking one and throw
+            # away the bytes the next attempt could have resumed from.
+            if promised and done < promised:
+                raise IOError(f"stopped short :: {done} of {promised} bytes")
 
     with NAME_LOCK:
         dest = unique_path(os.path.join(outdir, it.name))
@@ -2817,6 +2827,31 @@ def selftest():
     assert tweet_items({}, "1") == []
     assert tweet_items({"__typename": "TweetTombstone"}, "1") == []
     assert tweet_items({"mediaDetails": [{"type": "photo"}]}, "1") == []
+
+    # a body shorter than the length the server promised is a failed download,
+    # not a finished one, and the bytes must stay resumable
+    class _ShortSession:
+        def get(self, url, **kw):
+            return type("R", (), {
+                "status_code": 200, "headers": {"content-length": "10"},
+                "__enter__": lambda s: s, "__exit__": lambda *a: False,
+                "raise_for_status": lambda s: None,
+                "iter_content": lambda s, n: iter([b"1234"])})()
+
+    keep_session_for = session_for
+    globals()["session_for"] = lambda proxy=None: _ShortSession()
+    try:
+        short_dir = tempfile.mkdtemp()
+        cut = Item("https://h/x.bin", "x.bin", "file")
+        try:
+            download_file(cut, short_dir, None, False, lambda *_a: None)
+            raise AssertionError("half a file passed as a finished one")
+        except OSError as exc:
+            assert "stopped short" in str(exc), exc
+        assert not os.path.exists(os.path.join(short_dir, "x.bin")), "half a file was kept"
+        assert os.path.getsize(part_path(short_dir, cut.name, cut.url)) == 4,             "the resumable bytes were thrown away"
+    finally:
+        globals()["session_for"] = keep_session_for
 
     from i18n import LANGUAGES as _langs, STRINGS as _strings, Tr as _Tr
     base = set(_strings["en"])

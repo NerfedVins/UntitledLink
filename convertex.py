@@ -690,7 +690,14 @@ def embed_urls(soup, base: str) -> list[str]:
 
 
 def scrape_page(url: str, proxy: str | None, log, embeds: bool = True,
-                workers: int = PARALLEL) -> list[Item]:
+                workers: int = PARALLEL, quiet: bool = False) -> list[Item]:
+    """Every downloadable thing a page links to.
+
+    quiet=True is the discreet scan: the page is read and nothing else is
+    touched. The rows arrive with no size, and the one you click gets measured
+    then - which is one request per row you look at instead of one per link on
+    the page, plus the extra HEADs a full-resolution hunt costs.
+    """
     s = session_for(proxy)
     # streamed so the body can be read in a bounded slice below
     r = s.get(url, timeout=25, stream=True)
@@ -722,9 +729,16 @@ def scrape_page(url: str, proxy: str | None, log, embeds: bool = True,
         if meta.get("property") in ("og:image", "og:video") or meta.get("name") == "twitter:image":
             add(meta.get("content"))
 
-    log(f"{len(found)} candidates, probing sizes and full-res variants...")
-    items = probe_all([Item(u, name_from_url(u), k, thumb=u if k == "image" else None)
-                       for u, k in found.items()], s, workers)
+    items = [Item(u, name_from_url(u), k, thumb=u if k == "image" else None)
+             for u, k in found.items()]
+    if quiet:
+        # Nothing is probed, so nothing can be dropped either: a link that ends
+        # in .ogg but serves a wiki page stays in the list until the row is
+        # clicked and its content type gives it away.
+        log(f"{len(items)} candidates, sizes measured on demand")
+    else:
+        log(f"{len(items)} candidates, probing sizes and full-res variants...")
+        items = probe_all(items, s, workers)
     items.sort(key=lambda i: (i.kind, -i.size))
 
     # Embedded video goes on top: on a page that has one, it is usually the
@@ -1111,7 +1125,7 @@ def is_media_host(url: str) -> bool:
 
 def scan(url: str, proxy: str | None, log, cookies: str = "",
          no_video_msg: str = "", cookies_msg: str = "",
-         workers: int = PARALLEL) -> list[Item]:
+         workers: int = PARALLEL, quiet: bool = False) -> list[Item]:
     log("asking yt-dlp...")
     items, err = scan_media(url, proxy, log, cookies)
     if items:
@@ -1125,7 +1139,7 @@ def scan(url: str, proxy: str | None, log, cookies: str = "",
             # and interface icons, which is why they are excluded by name.
             try:
                 items = items + scrape_page(url, proxy, log, embeds=False,
-                                            workers=workers)
+                                            workers=workers, quiet=quiet)
             except Exception as exc:
                 log(f"the page itself would not scrape :: {exc}")
         return items
@@ -1151,7 +1165,7 @@ def scan(url: str, proxy: str | None, log, cookies: str = "",
         raise RuntimeError(" :: ".join(p for p in parts if p))
 
     log("not a known media site - scraping the page...")
-    return scrape_page(url, proxy, log, workers=workers)
+    return scrape_page(url, proxy, log, workers=workers, quiet=quiet)
 
 
 # --------------------------------------------------------------------------
@@ -1383,6 +1397,7 @@ class App:
         self.t = Tr(self.prefs.get("language", "en"))
         self.marked: set[str] = set()
         self.cancelled: set[int] = set()   # item indices pulled mid-download
+        self.sized: set[int] = set()       # rows already measured on demand
         self.scanning = False
         # Bumped to abandon a scan. The worker cannot be killed - it is parked
         # in a socket read - so instead its result is dropped when it finally
@@ -1410,6 +1425,11 @@ class App:
         # Deliberately not remembered. A privacy mode you get by accident,
         # because it was on last week, is not one you can reason about - and
         # remembering it would mean writing the very file it suppresses.
+        # Off by default: the full scan is the better experience when the site
+        # can take it, and most can. On, the scan asks the site for the page and
+        # nothing else - for a small server, or a login you would rather not
+        # make look like a scraper.
+        self.quiet_var = tk.BooleanVar(value=bool(self.prefs.get("quiet_scan", False)))
         self.private_var = tk.BooleanVar(value=False)
         self.private_var.trace_add("write", lambda *_: self.apply_private())
         self.quality_var = tk.StringVar(value=self.prefs.get("quality", "best"))
@@ -1460,6 +1480,7 @@ class App:
             "strip_metadata": bool(self.clean_var.get()),
             "cookies": self.cookies(),
             "double_click_downloads": bool(self.dblclick_var.get()),
+            "quiet_scan": bool(self.quiet_var.get()),
             "attempts": self.attempts(),
             "parallel": self.workers(),
         })
@@ -1885,6 +1906,7 @@ class App:
         self.tree.delete(*self.tree.get_children())
         self.items = []
         self.marked.clear()
+        self.sized.clear()
         self.show_source_line([])
         self.clear_thumb(self.t("preview_hint"))
         self.meta_box.config(text="")
@@ -1955,7 +1977,9 @@ class App:
         rows = self.tree.selection()
         if not rows:
             return
-        it = self.items[self.tree.index(rows[0])]
+        index = self.tree.index(rows[0])
+        it = self.items[index]
+        self.measure(index, it)
         self.preview_token += 1
         token = self.preview_token
         head_bits = "  ".join(b for b in (self.t("kind_" + it.kind),
@@ -1983,6 +2007,27 @@ class App:
             args=(it.thumb, it.url if it.kind == "image" else "", token,
                   self.proxy_var.get().strip() or None),
             daemon=True).start()
+
+    def measure(self, index: int, it: Item):
+        """Fill in a row's size the first time it is opened.
+
+        The discreet scan measures nothing up front, so this is where a row
+        gets its size: one HEAD, for the row you actually looked at. Rows that
+        came back with a size already, and yt-dlp's rows - whose URL is a page
+        rather than a file - are left alone.
+        """
+        if it.size or it.via == "ytdlp" or index in self.sized:
+            return
+        self.sized.add(index)
+        threading.Thread(
+            target=self._size_worker,
+            args=(index, it.url, self.scan_token,
+                  self.proxy_var.get().strip() or None),
+            daemon=True).start()
+
+    def _size_worker(self, index, url, token, proxy):
+        size, ctype = head(session_for(proxy), url)
+        self.q.put(("size", (index, size, token), ctype))
 
     def _thumb_worker(self, url, real_url, token, proxy):
         try:
@@ -2209,6 +2254,14 @@ class App:
                        cursor="hand2", anchor="w").pack(fill="x", padx=20)
         hint(self.t("dlg_dblclick_hint"))
 
+        head(self.t("dlg_quiet"))
+        tk.Checkbutton(body, text=self.t("dlg_quiet"), variable=self.quiet_var,
+                       bg=C["bg"], fg=C["fg"], font=self.f, selectcolor=C["panel"],
+                       activebackground=C["bg"], activeforeground=C["green"],
+                       highlightthickness=0, borderwidth=0,
+                       cursor="hand2", anchor="w").pack(fill="x", padx=20)
+        hint(self.t("dlg_quiet_hint"))
+
         head(self.t("dlg_parallel"))
         tk.Spinbox(body, from_=1, to=MAX_PARALLEL, width=5,
                    textvariable=self.parallel_var,
@@ -2331,6 +2384,7 @@ class App:
         self.tree.delete(*self.tree.get_children())
         self.items = []
         self.marked.clear()
+        self.sized.clear()
         self.stop_btn.pack(side="left", padx=(6, 0))
         threading.Thread(target=self._scan_worker, args=(url, self.scan_token),
                          daemon=True).start()
@@ -2341,7 +2395,8 @@ class App:
             items = scan(url, self.proxy_var.get().strip() or None, self.say,
                          self.cookies(),
                          self.t("no_video", site=urlparse(url).netloc),
-                         self.t("try_cookies"), self.workers())
+                         self.t("try_cookies"), self.workers(),
+                         bool(self.quiet_var.get()))
             if token != self.scan_token:
                 self.log(f"scan finished after being stopped, result dropped "
                          f":: {url}", "warn")
@@ -2551,6 +2606,22 @@ class App:
                         if token == self.preview_token:
                             self.show_thumb(img)
                         self.fill_dimensions(url, b)
+                elif kind == "size":
+                    index, size, token = a
+                    rows = self.tree.get_children()
+                    if token == self.scan_token and index < len(rows):
+                        if "html" in (b or ""):
+                            # the discreet scan cannot drop these while it
+                            # scans, so the row is called out here instead of
+                            # downloading a web page as the file it looks like
+                            self.log(f"serves a page, not a file :: "
+                                     f"{self.items[index].url}", "warn")
+                            size = 0
+                        self.items[index].size = size
+                        self.tree.set(rows[index], "size", human(size))
+                        # the panel was drawn before the size landed
+                        if self.tree.selection() == (rows[index],):
+                            self.show_preview()
                 elif kind == "items":
                     self.items = a
                     for it in a:
@@ -2622,6 +2693,39 @@ def selftest():
     probed = probe_all([Item(f"https://h/{n}.mp4", f"{n}.mp4", "video")
                         for n in range(8)], _CountingSession(), workers=2)
     assert len(probed) == 8 and peak[0] <= 2, f"{peak[0]} probes at once, asked for 2"
+
+    # the discreet scan reads the page and touches nothing else; the full one
+    # measures every candidate
+    page = (b'<html><body><a href="/a.mp4">a</a><img src="/b.jpg">'
+            b'<a href="/c.mp3">c</a></body></html>')
+    heads = []
+
+    class _PageSession:
+        def get(self, url, **kw):
+            raw = type("Raw", (), {"read": lambda _s, n, decode_content=True: page})()
+            return type("R", (), {"headers": {"content-type": "text/html"},
+                                  "raw": raw,
+                                  "raise_for_status": lambda _s: None})()
+
+        def head(self, url, **kw):
+            heads.append(url)
+            return type("R", (), {"status_code": 200,
+                                  "headers": {"content-length": "9",
+                                              "content-type": "video/mp4"}})()
+
+    keep_session_for = session_for
+    globals()["session_for"] = lambda proxy=None: _PageSession()
+    try:
+        quiet = scrape_page("https://h/p", None, lambda *_a: None,
+                            embeds=False, quiet=True)
+        assert len(quiet) == 3, f"discreet scan found {len(quiet)} of 3 links"
+        assert not heads, f"discreet scan probed {heads}"
+        assert all(it.size == 0 for it in quiet), "sizes must wait to be asked for"
+        full = scrape_page("https://h/p", None, lambda *_a: None, embeds=False)
+        assert len(heads) == 3 and all(it.size == 9 for it in full)
+    finally:
+        globals()["session_for"] = keep_session_for
+
 
     assert kind_of("https://x.com/p/photo.WEBP") == "image"
     assert kind_of("https://x.com/page") is None
@@ -3100,6 +3204,21 @@ def ui_selftest():
         assert len(started) == 1, "double click did nothing with the setting on"
         app.dblclick_var.set(False)
         app.do_download = real_download
+
+        # the discreet scan is opt-in, and the on-demand measuring it relies on
+        # asks once per row: not twice, not for a row that already has a size,
+        # and never for a yt-dlp row whose url is a page rather than a file
+        assert not app.quiet_var.get(), "discreet scan must be opt-in"
+        app._size_worker = lambda *a: None
+        app.items = [Item("https://h/a.mp4", "a.mp4", "video"),
+                     Item("https://h/b.mp4", "b.mp4", "video", 12),
+                     Item("https://h/page", "page", "video", via="ytdlp")]
+        for i, it in enumerate(app.items):
+            app.measure(i, it)
+            app.measure(i, it)
+        assert app.sized == {0}, f"measured the wrong rows: {app.sized}"
+        app.items = []
+        app.sized.clear()
 
         # the header is the app name and nothing else now
         head_text = " ".join(

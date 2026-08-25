@@ -280,12 +280,32 @@ needs it, and do not combine it with Tor expecting to stay unidentified.
 
 ## Anonymity
 
-The **proxy box is the switch**. `socks5://127.0.0.1:9050` for Tor, or any
-VPN/proxy endpoint. It applies to scanning and downloading alike.
+**"All through tor"** is a checkbox, beside the private session in the main bar
+and in settings. It finds Tor on 9050 (the tor service) or 9150 (the copy inside
+the Tor Browser) and sends every request through it: page scans, size checks,
+previews, downloads, and yt-dlp, which has its own network stack and is handed
+the same address. Tor has to be running - the box refuses to stay ticked when
+nothing answers on either port, because the alternative is one failed request
+per row.
 
-The app keeps no history, no cache, no cookies, and sends no telemetry. But with
-the box empty the site sees your real IP - no application can change that. Tor is
-frequently blocked by YouTube and Cloudflare, so expect it to be unreliable there.
+The address used is `socks5h://`, and the `h` is the part that matters: without
+it the hostname is resolved here first, so the traffic leaves through Tor while
+your provider has already been told which site you are about to visit.
+
+The **proxy box** still takes anything else - a VPN endpoint, a company proxy.
+Tor wins over it while the box is ticked.
+
+Measured over the real network, against archive.org: a page scan in 12s, a
+3 MB download at 557 KB/s. Wikimedia answered a Tor exit with `403 Too many
+requests. Please respect our robot policy`, which is the shape of the day you
+should expect - YouTube and Cloudflare do the same, harder.
+
+**Cookies are the hole none of this closes.** A login says who you are whatever
+address it arrives from, so the hint line says `tor (cookies name you)` while
+both are on. The private session turns cookies off, and the two belong together.
+
+The app keeps no history, no cache and sends no telemetry. With nothing ticked
+the site sees your real IP - no application can change that.
 
 ## Testing it
 

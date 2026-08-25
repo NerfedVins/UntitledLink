@@ -501,27 +501,32 @@ def human(n: int) -> str:
     return "?"
 
 
-# Tor's SOCKS port, as the Tor Browser and the tor service both open it.
-# socks5h rather than socks5: the h is what sends the hostname through the
-# circuit instead of resolving it here first, and a local DNS lookup tells your
-# provider which site you are about to visit however the traffic then leaves.
-TOR_PROXY = "socks5h://127.0.0.1:9050"
-TOR_PORT = 9050
+# Where Tor listens, in the order worth trying. 9050 is the tor service or
+# the expert bundle; 9150 is the copy that comes inside the Tor Browser and
+# runs while that browser is open. Which one exists depends on how Tor was
+# installed, which is not a question the window should be asking anybody.
+TOR_PORTS = (9050, 9150)
 
 
-def tor_ready(host: str = "127.0.0.1", port: int = TOR_PORT,
-              timeout: float = 1.5) -> bool:
-    """Is something listening on Tor's port?
+def tor_proxy(host: str = "127.0.0.1", ports: tuple[int, ...] = TOR_PORTS,
+              timeout: float = 1.5) -> str | None:
+    """The address of a Tor that is actually running, or None.
 
-    Ticking the box does nothing on its own - Tor has to be running. Without
-    this the answer arrives as a wall of failed requests, one per row.
+    socks5h rather than socks5: the h is what sends the hostname through the
+    circuit instead of resolving it here first, and a local DNS lookup tells
+    your provider which site you are about to visit however the traffic then
+    leaves. Ticking the box does nothing on its own - Tor has to be there -
+    and without this check the answer arrives as a wall of failed requests,
+    one per row.
     """
     import socket
-    try:
-        with socket.create_connection((host, port), timeout):
-            return True
-    except OSError:
-        return False
+    for port in ports:
+        try:
+            with socket.create_connection((host, port), timeout):
+                return f"socks5h://{host}:{port}"
+        except OSError:
+            continue
+    return None
 
 
 def session_for(proxy: str | None) -> requests.Session:
@@ -1509,6 +1514,7 @@ class App:
         # Tor has to be running for it to mean anything, and a box that was
         # ticked last week is a scan that fails for a reason nobody remembers.
         self.tor_var = tk.BooleanVar(value=False)
+        self.tor_addr: str | None = None      # filled in when the box goes on
         self.tor_var.trace_add("write", lambda *_: self.apply_tor())
         self.quality_var = tk.StringVar(value=self.prefs.get("quality", "best"))
         # StringVar, not IntVar: an IntVar raises TclError the moment it holds
@@ -1553,12 +1559,16 @@ class App:
         fail, once per row, with a connection error that names a port. So the
         box refuses to stay on rather than promising something it cannot do.
         """
-        if self.tor_var.get() and not tor_ready():
-            self.tor_var.set(False)          # traces again, and lands below
-            self.say(self.t("tor_missing"), C["amber"])
-            self.log(f"tor: nothing listening on 127.0.0.1:{TOR_PORT} - "
-                     f"start the Tor Browser or the tor service", "warn")
-            return
+        if self.tor_var.get():
+            self.tor_addr = tor_proxy()
+            if not self.tor_addr:
+                self.tor_var.set(False)      # traces again, and lands below
+                self.say(self.t("tor_missing"), C["amber"])
+                self.log("tor: nothing listening on "
+                         + " or ".join(f"127.0.0.1:{p}" for p in TOR_PORTS)
+                         + " - start the Tor Browser or the tor service", "warn")
+                return
+            self.log(f"tor: routing everything through {self.tor_addr}")
         self.refresh_hint()
 
     def remember(self):
@@ -1585,9 +1595,14 @@ class App:
 
     def proxy(self) -> str | None:
         """Where every request goes out: Tor when it is on, otherwise whatever
-        is typed in settings, otherwise straight out."""
-        if self.tor_var.get():
-            return TOR_PROXY
+        is typed in settings, otherwise straight out.
+
+        The Tor address is the one found when the box was ticked, rather than
+        a fresh look each time: this is asked once per scan and once per
+        download, and the answer does not move while the app is open.
+        """
+        if self.tor_var.get() and self.tor_addr:
+            return self.tor_addr
         return self.proxy_var.get().strip() or None
 
     def cookies(self) -> str:
@@ -3020,16 +3035,23 @@ def selftest():
     finally:
         globals()["session_for"] = keep_session_for
 
-    # ticking the tor box means nothing unless tor is actually there
+    # ticking the tor box means nothing unless tor is actually there, and it
+    # can be there on either of two ports depending on how it was installed
     import socket as _socket
     listener = _socket.socket()
     listener.bind(("127.0.0.1", 0))
-    listener.listen(1)
+    # nothing here accepts, so every probe stays in the queue: a backlog of one
+    # would make the second probe look like a Tor that is not running
+    listener.listen(16)
     live_port = listener.getsockname()[1]
-    assert tor_ready("127.0.0.1", live_port), "a listening port must read as up"
+    found = tor_proxy("127.0.0.1", (live_port,))
+    assert found == f"socks5h://127.0.0.1:{live_port}", found
+    assert found.startswith("socks5h://"),         "socks5 without the h resolves the hostname here, which tells the "         "provider which site is about to be visited"
+    # the service port is dead and the browser's is up: the browser's answers
+    assert tor_proxy("127.0.0.1", (1, live_port), timeout=0.5) == found,         "a Tor on the second port has to be found too"
     listener.close()
-    assert not tor_ready("127.0.0.1", live_port, timeout=0.5),         "a closed port must read as down, not hang"
-    assert TOR_PROXY.startswith("socks5h://"),         "socks5 without the h resolves the hostname here, which tells the "         "provider which site is about to be visited"
+    assert tor_proxy("127.0.0.1", (live_port,), timeout=0.5) is None,         "a closed port must read as down, not hang"
+    assert TOR_PORTS == (9050, 9150), "the tor service, then the Tor Browser"
 
     from i18n import LANGUAGES as _langs, STRINGS as _strings, Tr as _Tr
     base = set(_strings["en"])
@@ -3359,26 +3381,28 @@ def ui_selftest():
         app.proxy_var.set("http://127.0.0.1:8080")
         assert app.proxy() == "http://127.0.0.1:8080"
 
-        keep_ready = tor_ready
-        globals()["tor_ready"] = lambda *a, **k: True
+        keep_ready = tor_proxy
+        fake_tor = "socks5h://127.0.0.1:9150"
+        globals()["tor_proxy"] = lambda *a, **k: fake_tor
         try:
             app.tor_var.set(True)
             assert app.tor_var.get(), "tor was on and available, so it stays on"
-            assert app.proxy() == TOR_PROXY, "tor wins over the typed proxy"
+            assert app.proxy() == fake_tor, "tor wins over the typed proxy"
             app.cookies_var.set("firefox")
             app.refresh_hint()
             assert "cookies name you" in app.settings_hint.cget("text"),                 "a login over tor is worth a word"
             app.cookies_var.set(NO_COOKIES)
             app.tor_var.set(False)
         finally:
-            globals()["tor_ready"] = keep_ready
+            globals()["tor_proxy"] = keep_ready
 
-        globals()["tor_ready"] = lambda *a, **k: False
+        globals()["tor_proxy"] = lambda *a, **k: None
         try:
             app.tor_var.set(True)
             assert not app.tor_var.get(),                 "tor is not running, so the box must not pretend it is on"
+            assert app.proxy() == "http://127.0.0.1:8080",                 "with tor off the typed proxy is the route again"
         finally:
-            globals()["tor_ready"] = keep_ready
+            globals()["tor_proxy"] = keep_ready
         app.proxy_var.set("")
         assert str(app.tor_box.cget("variable")) == str(app.tor_var),             "the main bar has its own tor flag, so the dialog cannot see it"
 

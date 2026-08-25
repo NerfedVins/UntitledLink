@@ -3,7 +3,11 @@
 # carry floors rather than pins - the APIs used here are old and stable, but a
 # machine with a five-year-old Pillow should be told rather than fail oddly.
 yt-dlp
-requests>=2.31
+# The [socks] extra is PySocks, and without it a socks5 proxy - which is
+# what Tor is - fails at the first request with "Missing dependencies for
+# SOCKS support". yt-dlp carries its own SOCKS code, so leaving it out
+# broke half the app and left the other half working.
+requests[socks]>=2.31
 beautifulsoup4>=4.12
 pillow>=10.0
 

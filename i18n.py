@@ -39,6 +39,16 @@ STRINGS = {
                             "It does NOT hide the download from the site. Your\n"
                             "address is in their logs either way - only a proxy\n"
                             "changes that. Not remembered; switch it on each time.",
+        "dlg_tor": "route everything through tor",
+        "dlg_tor_hint": "Off by default, and not remembered. Sends every\n"
+                        "request through Tor on 127.0.0.1:9050, so the site\n"
+                        "sees an exit node and your provider sees Tor.\n"
+                        "Tor has to be running: the Tor Browser, or the tor\n"
+                        "service. Expect it to be slow, and expect some\n"
+                        "sites to refuse an exit node outright. Turn browser\n"
+                        "cookies off with it - a login says who you are\n"
+                        "whatever address it arrives from.",
+        "tor_missing": "tor is not running on 127.0.0.1:9050",
         "dlg_dblclick": "double click a row to download it",
         "dlg_dblclick_hint": "Off by default. The first click of the pair has\n"
                              "already marked the row, so an accidental double\n"
@@ -115,6 +125,17 @@ STRINGS = {
                             "ΔΕΝ κρύβει τη λήψη από το site. Η διεύθυνσή σου είναι στα\n"
                             "logs του έτσι κι αλλιώς - μόνο ένα proxy το αλλάζει αυτό.\n"
                             "Δεν απομνημονεύεται· ενεργοποίησέ το κάθε φορά.",
+        "dlg_tor": "όλα μέσα από tor",
+        "dlg_tor_hint": "Ανενεργό εξ ορισμού, και δεν απομνημονεύεται.\n"
+                        "Στέλνει κάθε αίτημα μέσα από το Tor στο\n"
+                        "127.0.0.1:9050, οπότε το site βλέπει exit node και\n"
+                        "ο πάροχός σου βλέπει Tor.\n"
+                        "Το Tor πρέπει να τρέχει: ο Tor Browser ή η\n"
+                        "υπηρεσία tor. Περίμενε αργά, και περίμενε κάποια\n"
+                        "sites να αρνούνται τα exit nodes.\n"
+                        "Κλείσε μαζί τα cookies - μια σύνδεση λέει ποιος\n"
+                        "είσαι από όποια διεύθυνση κι αν έρθει.",
+        "tor_missing": "το tor δεν τρέχει στο 127.0.0.1:9050",
         "dlg_dblclick": "διπλό κλικ σε γραμμή για λήψη",
         "dlg_dblclick_hint": "Ανενεργό εξ ορισμού. Το πρώτο κλικ έχει ήδη\n"
                              "μαρκάρει τη γραμμή, οπότε ένα κατά λάθος διπλό\n"

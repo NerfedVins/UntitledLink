@@ -501,6 +501,29 @@ def human(n: int) -> str:
     return "?"
 
 
+# Tor's SOCKS port, as the Tor Browser and the tor service both open it.
+# socks5h rather than socks5: the h is what sends the hostname through the
+# circuit instead of resolving it here first, and a local DNS lookup tells your
+# provider which site you are about to visit however the traffic then leaves.
+TOR_PROXY = "socks5h://127.0.0.1:9050"
+TOR_PORT = 9050
+
+
+def tor_ready(host: str = "127.0.0.1", port: int = TOR_PORT,
+              timeout: float = 1.5) -> bool:
+    """Is something listening on Tor's port?
+
+    Ticking the box does nothing on its own - Tor has to be running. Without
+    this the answer arrives as a wall of failed requests, one per row.
+    """
+    import socket
+    try:
+        with socket.create_connection((host, port), timeout):
+            return True
+    except OSError:
+        return False
+
+
 def session_for(proxy: str | None) -> requests.Session:
     s = requests.Session()
     s.headers.update({"User-Agent": UA, "Accept-Language": "en-US,en;q=0.9"})
@@ -1482,6 +1505,11 @@ class App:
         self.quiet_var = tk.BooleanVar(value=bool(self.prefs.get("quiet_scan", False)))
         self.private_var = tk.BooleanVar(value=False)
         self.private_var.trace_add("write", lambda *_: self.apply_private())
+        # Not remembered either, and for a plainer reason than private mode:
+        # Tor has to be running for it to mean anything, and a box that was
+        # ticked last week is a scan that fails for a reason nobody remembers.
+        self.tor_var = tk.BooleanVar(value=False)
+        self.tor_var.trace_add("write", lambda *_: self.apply_tor())
         self.quality_var = tk.StringVar(value=self.prefs.get("quality", "best"))
         # StringVar, not IntVar: an IntVar raises TclError the moment it holds
         # anything non-numeric, and both a hand-edited settings file and the
@@ -1518,6 +1546,21 @@ class App:
         PRIVATE = bool(self.private_var.get())
         self.refresh_hint()
 
+    def apply_tor(self):
+        """Tick the box and every request goes through Tor - if Tor is there.
+
+        Nothing else in the window can tell you it is not: the scan would just
+        fail, once per row, with a connection error that names a port. So the
+        box refuses to stay on rather than promising something it cannot do.
+        """
+        if self.tor_var.get() and not tor_ready():
+            self.tor_var.set(False)          # traces again, and lands below
+            self.say(self.t("tor_missing"), C["amber"])
+            self.log(f"tor: nothing listening on 127.0.0.1:{TOR_PORT} - "
+                     f"start the Tor Browser or the tor service", "warn")
+            return
+        self.refresh_hint()
+
     def remember(self):
         if self.private_var.get():
             return          # nothing about this session goes to disk
@@ -1539,6 +1582,13 @@ class App:
 
     def workers(self) -> int:
         return clamp_int(self.parallel_var.get(), PARALLEL, 1, MAX_PARALLEL)
+
+    def proxy(self) -> str | None:
+        """Where every request goes out: Tor when it is on, otherwise whatever
+        is typed in settings, otherwise straight out."""
+        if self.tor_var.get():
+            return TOR_PROXY
+        return self.proxy_var.get().strip() or None
 
     def cookies(self) -> str:
         """The browser to lift cookies from, or "" for none.
@@ -1778,6 +1828,12 @@ class App:
             activebackground=C["bg"], activeforeground=C["green"],
             highlightthickness=0, borderwidth=0, cursor="hand2")
         self.private_box.pack(side="right")
+        self.tor_box = tk.Checkbutton(
+            out, text=self.t("dlg_tor"), variable=self.tor_var,
+            bg=C["bg"], fg=C["dim"], font=self.f, selectcolor=C["panel"],
+            activebackground=C["bg"], activeforeground=C["green"],
+            highlightthickness=0, borderwidth=0, cursor="hand2")
+        self.tor_box.pack(side="right", padx=(0, 14))
 
         # --- results: list on the left, preview on the right ---------------
         wrap = tk.Frame(self.root, bg=C["bg"])
@@ -2082,7 +2138,7 @@ class App:
         threading.Thread(
             target=self._thumb_worker,
             args=(it.thumb, it.url if it.kind == "image" else "", token,
-                  self.proxy_var.get().strip() or None),
+                  self.proxy()),
             daemon=True).start()
 
     def measure(self, index: int, it: Item):
@@ -2099,7 +2155,7 @@ class App:
         threading.Thread(
             target=self._size_worker,
             args=(index, it.url, self.scan_token,
-                  self.proxy_var.get().strip() or None),
+                  self.proxy()),
             daemon=True).start()
 
     def _size_worker(self, index, url, token, proxy):
@@ -2206,9 +2262,13 @@ class App:
             # Worth saying plainly: private mode keeps this machine clean, it
             # does not hide the download from the other end. Only a proxy does
             # anything about the address the site sees.
-            bits.append("private" if self.proxy_var.get().strip()
+            bits.append("private" if self.proxy()
                         else "private (no proxy - your IP still shows)")
-        if self.proxy_var.get().strip():
+        if self.tor_var.get():
+            # Cookies say who you are, which is the one thing an anonymous
+            # route cannot take back. Worth saying while both are on.
+            bits.append("tor (cookies name you)" if self.cookies() else "tor")
+        elif self.proxy_var.get().strip():
             bits.append("proxy")
         if self.cookies():
             bits.append(f"cookies:{self.cookies()}")
@@ -2323,6 +2383,14 @@ class App:
                        cursor="hand2", anchor="w").pack(fill="x", padx=20)
         hint(self.t("dlg_private_hint"))
 
+        head(self.t("dlg_tor"))
+        tk.Checkbutton(body, text=self.t("dlg_tor"), variable=self.tor_var,
+                       bg=C["bg"], fg=C["fg"], font=self.f, selectcolor=C["panel"],
+                       activebackground=C["bg"], activeforeground=C["green"],
+                       highlightthickness=0, borderwidth=0,
+                       cursor="hand2", anchor="w").pack(fill="x", padx=20)
+        hint(self.t("dlg_tor_hint"))
+
         head(self.t("dlg_dblclick"))
         tk.Checkbutton(body, text=self.t("dlg_dblclick"), variable=self.dblclick_var,
                        bg=C["bg"], fg=C["fg"], font=self.f, selectcolor=C["panel"],
@@ -2368,8 +2436,8 @@ class App:
         # the session, which is the one thing cancel promises not to do.
         touched = (self.outdir_var, self.proxy_var, self.quality_var,
                    self.cookies_var, self.clean_var, self.private_var,
-                   self.dblclick_var, self.quiet_var, self.parallel_var,
-                   self.attempts_var)
+                   self.tor_var, self.dblclick_var, self.quiet_var,
+                   self.parallel_var, self.attempts_var)
         before = [v.get() for v in touched]
 
         def cancel():
@@ -2487,7 +2555,7 @@ class App:
     def _scan_worker(self, url, token):
         self.log(f"scan {url}")
         try:
-            items = scan(url, self.proxy_var.get().strip() or None, self.say,
+            items = scan(url, self.proxy(), self.say,
                          self.cookies(),
                          self.t("no_video", site=urlparse(url).netloc),
                          self.t("try_cookies"), self.workers(),
@@ -2535,7 +2603,7 @@ class App:
         self.stop_btn.pack(side="left", padx=(6, 0))
         threading.Thread(
             target=self._dl_worker,
-            args=(picks, outdir, self.proxy_var.get().strip() or None,
+            args=(picks, outdir, self.proxy(),
                   self.quality_var.get(), self.clean_var.get(),
                   self.cookies(), self.workers(), self.attempts()),
             daemon=True).start()
@@ -2952,6 +3020,17 @@ def selftest():
     finally:
         globals()["session_for"] = keep_session_for
 
+    # ticking the tor box means nothing unless tor is actually there
+    import socket as _socket
+    listener = _socket.socket()
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(1)
+    live_port = listener.getsockname()[1]
+    assert tor_ready("127.0.0.1", live_port), "a listening port must read as up"
+    listener.close()
+    assert not tor_ready("127.0.0.1", live_port, timeout=0.5),         "a closed port must read as down, not hang"
+    assert TOR_PROXY.startswith("socks5h://"),         "socks5 without the h resolves the hostname here, which tells the "         "provider which site is about to be visited"
+
     from i18n import LANGUAGES as _langs, STRINGS as _strings, Tr as _Tr
     base = set(_strings["en"])
     for code in _langs:
@@ -3272,6 +3351,36 @@ def ui_selftest():
         assert app.proxy_var.get() == was_proxy, "cancel kept the typed proxy"
         assert not [w for w in root.winfo_children()
                     if isinstance(w, tk.Toplevel)], "cancel left the dialog open"
+
+        # tor: the box picks the route, and refuses to stay on when there is
+        # nothing to route through
+        assert not app.tor_var.get(), "tor must be opt-in"
+        assert app.proxy() is None, "no proxy typed, no tor, nothing in the way"
+        app.proxy_var.set("http://127.0.0.1:8080")
+        assert app.proxy() == "http://127.0.0.1:8080"
+
+        keep_ready = tor_ready
+        globals()["tor_ready"] = lambda *a, **k: True
+        try:
+            app.tor_var.set(True)
+            assert app.tor_var.get(), "tor was on and available, so it stays on"
+            assert app.proxy() == TOR_PROXY, "tor wins over the typed proxy"
+            app.cookies_var.set("firefox")
+            app.refresh_hint()
+            assert "cookies name you" in app.settings_hint.cget("text"),                 "a login over tor is worth a word"
+            app.cookies_var.set(NO_COOKIES)
+            app.tor_var.set(False)
+        finally:
+            globals()["tor_ready"] = keep_ready
+
+        globals()["tor_ready"] = lambda *a, **k: False
+        try:
+            app.tor_var.set(True)
+            assert not app.tor_var.get(),                 "tor is not running, so the box must not pretend it is on"
+        finally:
+            globals()["tor_ready"] = keep_ready
+        app.proxy_var.set("")
+        assert str(app.tor_box.cget("variable")) == str(app.tor_var),             "the main bar has its own tor flag, so the dialog cannot see it"
 
         # private mode is a per-run decision, so it is offered in the main bar
         # as well as the dialog - and both have to drive the one variable

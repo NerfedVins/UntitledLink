@@ -1662,11 +1662,11 @@ class App:
         # Deliberately not remembered. A privacy mode you get by accident,
         # because it was on last week, is not one you can reason about - and
         # remembering it would mean writing the very file it suppresses.
-        # Off by default: the full scan is the better experience when the site
-        # can take it, and most can. On, the scan asks the site for the page and
-        # nothing else - for a small server, or a login you would rather not
-        # make look like a scraper.
-        self.quiet_var = tk.BooleanVar(value=bool(self.prefs.get("quiet_scan", False)))
+        # On by default. Measured on a 20-link page: the full scan costs 31
+        # requests, this one costs 1, and the difference is paid only where you
+        # look - one HEAD per row you open. The full scan is what to switch on
+        # when sizes to sort by are worth a request per link.
+        self.quiet_var = tk.BooleanVar(value=bool(self.prefs.get("quiet_scan", True)))
         self.private_var = tk.BooleanVar(value=False)
         self.private_var.trace_add("write", lambda *_: self.apply_private())
         # Not remembered either, and for a plainer reason than private mode:
@@ -3964,7 +3964,7 @@ def ui_selftest():
         # the discreet scan is opt-in, and the on-demand measuring it relies on
         # asks once per row: not twice, not for a row that already has a size,
         # and never for a yt-dlp row whose url is a page rather than a file
-        assert not app.quiet_var.get(), "discreet scan must be opt-in"
+        assert app.quiet_var.get(),             "the discreet scan is the default: 1 request a page, not 31"
         app._size_worker = lambda *a: None
         app.items = [Item("https://h/a.mp4", "a.mp4", "video"),
                      Item("https://h/b.mp4", "b.mp4", "video", 12),

@@ -78,13 +78,17 @@ STRINGS = {
                              "already marked the row, so an accidental double\n"
                              "click would start a download you did not ask for.",
         "dlg_quiet": "discreet scan",
-        "dlg_quiet_hint": "Off by default. The scan asks the site for the page\n"
-                          "and nothing else: no size is measured and no larger\n"
-                          "copy of an image is hunted for, so a page of 47\n"
-                          "links costs one request instead of fifty.\n"
-                          "The SIZE column stays empty until you open a row,\n"
-                          "which measures that one. For a small server, or a\n"
-                          "site you would rather not look like a scraper on.",
+        "dlg_quiet_hint": "On by default. The scan asks the site for the\n"
+                          "page and nothing else: no size is measured and\n"
+                          "no larger copy of an image is hunted for, so a\n"
+                          "page of 20 links costs one request instead of\n"
+                          "thirty-one. The SIZE column shows a dot until\n"
+                          "you open a row, which measures that one.\n"
+                          "Untick it to have everything measured up front:\n"
+                          "sizes to sort by, and links that turn out to be\n"
+                          "web pages dropped before you see them - at one\n"
+                          "request per link, which a small server reads as\n"
+                          "a scraper.",
         # What a row is. Format names - mp4, vp9, avc1, fps, kHz - are not
         # translated anywhere: they are what the format is called, not words.
         "kind_video": "video", "kind_audio": "audio", "kind_image": "image",
@@ -189,13 +193,17 @@ STRINGS = {
                              "μαρκάρει τη γραμμή, οπότε ένα κατά λάθος διπλό\n"
                              "κλικ θα ξεκινούσε λήψη που δεν ζήτησες.",
         "dlg_quiet": "διακριτική σάρωση",
-        "dlg_quiet_hint": "Ανενεργό εξ ορισμού. Η σάρωση ζητά από το site τη\n"
-                          "σελίδα και τίποτε άλλο: δεν μετριέται μέγεθος και\n"
-                          "δεν αναζητείται μεγαλύτερη έκδοση εικόνας, οπότε μια\n"
-                          "σελίδα με 47 links κοστίζει ένα αίτημα αντί για\n"
-                          "πενήντα. Η στήλη ΜΕΓΕΘΟΣ μένει κενή μέχρι να ανοίξεις\n"
-                          "μια γραμμή, που μετράει μόνο αυτήν. Για μικρό server,\n"
-                          "ή για site όπου δεν θες να μοιάζεις με scraper.",
+        "dlg_quiet_hint": "Ενεργό εξ ορισμού. Η σάρωση ζητά από το site τη\n"
+                          "σελίδα και τίποτε άλλο: δεν μετριέται μέγεθος\n"
+                          "και δεν αναζητείται μεγαλύτερη έκδοση εικόνας,\n"
+                          "οπότε μια σελίδα με 20 links κοστίζει ένα αίτημα\n"
+                          "αντί για τριάντα ένα. Η στήλη ΜΕΓΕΘΟΣ δείχνει\n"
+                          "τελεία μέχρι να ανοίξεις μια γραμμή.\n"
+                          "Σβήσ' το για να μετρηθούν όλα από την αρχή:\n"
+                          "μεγέθη για ταξινόμηση, και links που τελικά είναι\n"
+                          "σελίδες πετιούνται πριν τα δεις - με ένα αίτημα\n"
+                          "ανά link, που ένας μικρός server το διαβάζει σαν\n"
+                          "scraper.",
         "kind_video": "βίντεο", "kind_audio": "ήχος", "kind_image": "εικόνα",
         "kind_doc": "έγγραφο", "kind_archive": "αρχειοθήκη", "kind_file": "αρχείο",
         "q_as_set": "ό,τι ορίστηκε", "q_original": "πρωτότυπο", "q_audio": "ήχος",

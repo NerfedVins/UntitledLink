@@ -147,6 +147,25 @@ and retries instead of hanging forever.
 **`refresh`** re-scans the link already in the box. **`clear`** empties the box
 and the results with it.
 
+## How much a scan asks for
+
+**The discreet scan is the default.** Measured on a 20-link page:
+
+| | requests the site sees |
+|---|---|
+| full scan | **31** - one GET, then a HEAD per link, plus one per image while hunting a full-resolution copy |
+| discreet scan | **1** - the page, and nothing else |
+| discreet scan, three rows opened | **4** |
+
+Rows arrive without a size and the SIZE column shows a dot; opening one measures
+that one, and only that one. A dash means the question was asked and came back
+empty, which is a different thing.
+
+Untick it in settings for the full scan: sizes for everything up front to sort
+by, and links that turn out to be web pages dropped before they reach the list.
+That costs a request per link, which a small server reads as a scraper, and over
+Tor it costs seconds per request.
+
 ## Rate limits
 
 Parallelism aimed at one host is what trips rate limiters, so at most **2

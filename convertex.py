@@ -604,6 +604,35 @@ def tor_proxy(host: str = "127.0.0.1", ports: tuple[int, ...] = TOR_PORTS,
     return None
 
 
+PROXY_SCHEMES = ("http://", "https://", "socks4://", "socks5://", "socks5h://")
+
+
+def normalise_proxy(text: str) -> str | None:
+    """What the proxy box means, or None when it means nothing usable.
+
+    The box used to take anything at all. "127.0.0.1:9050" became an *http*
+    proxy as far as requests was concerned, so it spoke the wrong protocol at
+    Tor's SOCKS port and the answer arrived as one ProxyError per row; "tor"
+    was accepted as a hostname. A bare host:port is read as SOCKS now, which is
+    what anyone typing one into this app means, and what the hint suggests.
+
+    socks5 is upgraded to socks5h for the same reason Tor uses it: without the
+    h the hostname is resolved here, so the traffic leaves through the proxy
+    while the local resolver has already been told where it is going.
+    """
+    text = (text or "").strip()
+    if not text:
+        return None
+    if text.startswith("socks5://"):
+        text = "socks5h://" + text[len("socks5://"):]
+    if text.startswith(PROXY_SCHEMES):
+        return text if text.split("://", 1)[1] else None
+    host, _, port = text.rpartition(":")
+    if host and port.isdigit() and "/" not in text:
+        return f"socks5h://{text}"
+    return None
+
+
 def with_circuit(proxy: str, tag: str) -> str:
     """The same Tor, asked for a circuit of its own.
 
@@ -1716,7 +1745,7 @@ class App:
         """
         if self.tor_var.get() and self.tor_addr:
             return with_circuit(self.tor_addr, self.tor_circuit)
-        return self.proxy_var.get().strip() or None
+        return normalise_proxy(self.proxy_var.get())
 
     def cookies(self) -> str:
         """The browser to lift cookies from, or "" for none.
@@ -3159,6 +3188,17 @@ def selftest():
     finally:
         globals()["session_for"] = keep_session_for
 
+    # the proxy box: a bare host:port is a socks proxy, junk is nothing, and
+    # socks5 becomes socks5h so the name is resolved at the far end
+    assert normalise_proxy("127.0.0.1:9050") == "socks5h://127.0.0.1:9050"
+    assert normalise_proxy("socks5://10.0.0.1:1080") == "socks5h://10.0.0.1:1080"
+    assert normalise_proxy("socks5h://10.0.0.1:1080") == "socks5h://10.0.0.1:1080"
+    assert normalise_proxy("http://proxy.corp:3128") == "http://proxy.corp:3128"
+    assert normalise_proxy("  ") is None and normalise_proxy("") is None
+    assert normalise_proxy("tor") is None, "a word is not an address"
+    assert normalise_proxy("127.0.0.1") is None, "no port, no guessing one"
+    assert normalise_proxy("http://") is None
+
     # ticking the tor box means nothing unless tor is actually there, and it
     # can be there on either of two ports depending on how it was installed
     import socket as _socket
@@ -3552,6 +3592,11 @@ def ui_selftest():
         assert app.proxy() is None, "no proxy typed, no tor, nothing in the way"
         app.proxy_var.set("http://127.0.0.1:8080")
         assert app.proxy() == "http://127.0.0.1:8080"
+        app.proxy_var.set("127.0.0.1:9050")
+        assert app.proxy() == "socks5h://127.0.0.1:9050",             "a bare address must not be handed over as an http proxy"
+        app.proxy_var.set("nonsense")
+        assert app.proxy() is None, "junk in the box is not a route"
+        app.proxy_var.set("http://127.0.0.1:8080")
 
         keep_ready = tor_proxy
         fake_tor = "socks5h://127.0.0.1:9150"

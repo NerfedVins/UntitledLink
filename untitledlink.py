@@ -33,7 +33,7 @@ from urllib.parse import urljoin, urlparse, unquote, parse_qs, urlencode
 from i18n import COOKIE_BROWSERS, LANGUAGES, NO_COOKIES, Tr
 
 APP = "UntitledLink"
-VERSION = "0.1.1"
+VERSION = "0.1.2"
 
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")

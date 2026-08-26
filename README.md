@@ -249,16 +249,23 @@ Once an item has run out of tries its `.part` is deleted: nothing is ever going 
 finish it, and a download folder slowly filling with dead partials is its own
 problem. A `.part` left by **cancelling** is kept, because that one still resumes.
 
-## Settings
+## What is remembered
 
-`settings.json` sits next to the app and remembers your **download folder**,
-proxy, quality, and the strip-metadata toggle. Written when a download starts and
-when you close the window. It holds preferences only - **no link history**.
+`settings.json` sits next to the app and holds your **download folder**, proxy,
+quality, language, how many downloads run at once, how many tries each gets,
+and the strip-metadata, discreet-scan, subtitles and double-click toggles.
+Written when a download starts and when you close the window. Preferences only
+- **no link history**.
 
-Delete the file to reset. If the folder is read-only, the app runs fine and just
-does not remember.
+Two are deliberately not remembered: the private session and tor. A privacy
+mode you get by accident, because it was on last week, is not one you can
+reason about - and tor has to be running for it to mean anything, so a box that
+was ticked a week ago is a scan that fails for a reason nobody remembers.
 
-## Settings
+Delete the file to reset. If the folder is read-only, the app runs fine and
+just does not remember.
+
+## The settings dialog
 
 The `settings` button opens the dialog: **language**, **quality**,
 **download folder**, proxy, browser cookies, strip-metadata, and tries per file.

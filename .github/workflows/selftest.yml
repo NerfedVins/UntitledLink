@@ -1,0 +1,20 @@
+# The suite runs on a clean machine on every push, which is the only way to
+# find out that something only worked because of what was already installed
+# here. Windows because that is what this app is for: tkinter, pythonw, the
+# launcher and the filename rules are all Windows behaviour.
+name: selftest
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: python -m pip install -r requirements.txt
+      - run: python untitledlink.py --selftest

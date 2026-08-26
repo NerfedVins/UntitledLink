@@ -23,7 +23,7 @@ import traceback
 import tkinter as tk
 import webbrowser
 from tkinter import filedialog, font as tkfont, messagebox, ttk
-from urllib.parse import urljoin, urlparse, unquote
+from urllib.parse import urljoin, urlparse, unquote, parse_qs, urlencode
 
 
 # Pillow is only ever handed partial data here - previews are capped and the
@@ -827,6 +827,44 @@ def _asset_pattern() -> "re.Pattern":
                       % exts, re.I)
 
 
+def direct_link(url: str) -> str:
+    """The address of the file itself, for the handful of links that hide it.
+
+    Four shapes turn up constantly and all four hand you a page when what you
+    wanted was the file behind it. None of this is guesswork about a site's
+    layout - each one is a documented address that the site itself offers.
+    """
+    parts = urlparse(url)
+    host = parts.netloc.lower().removeprefix("www.")
+    query = parse_qs(parts.query)
+
+    # PDF.js: the viewer is a web page, and the pdf it is showing is sitting
+    # in its own query string. Universities serve half their handouts this way.
+    if "viewer.htm" in parts.path.lower() and query.get("file"):
+        return urljoin(url, unquote(query["file"][0]))
+
+    # arXiv gives every paper an abstract page and a pdf, one letter apart.
+    if host.endswith("arxiv.org") and parts.path.startswith("/abs/"):
+        paper = parts.path[len("/abs/"):].strip("/")
+        if paper:
+            return f"https://arxiv.org/pdf/{paper}.pdf"
+
+    # Dropbox shows a preview page unless told otherwise, and dl=1 is how it
+    # is told otherwise.
+    if host.endswith("dropbox.com") and parts.path.startswith(("/s/", "/scl/")):
+        keep = {k: v for k, v in query.items() if k != "dl"}
+        keep["dl"] = ["1"]
+        return parts._replace(query=urlencode(keep, doseq=True)).geturl()
+
+    # Drive's share link is a viewer around a file id.
+    if host == "drive.google.com":
+        found = re.search(r"/file/d/([^/]+)", parts.path)
+        drive_id = found.group(1) if found else (query.get("id") or [""])[0]
+        if drive_id:
+            return f"https://drive.google.com/uc?export=download&id={drive_id}"
+    return url
+
+
 def is_stream(url: str) -> bool:
     return os.path.splitext(urlparse(url).path)[1].lower() in STREAM_EXT
 
@@ -1081,7 +1119,7 @@ def scrape_page(url: str, proxy: str | None, log, embeds: bool = True,
     def add(raw, forced: str = "", name: str = ""):
         if not raw or raw.startswith(("data:", "javascript:", "#")):
             return
-        full = urljoin(url, raw.strip()).split("#")[0]
+        full = direct_link(urljoin(url, raw.strip()).split("#")[0])
         if is_stream(full):
             streams.add(full)
             found.setdefault(full, "video")
@@ -1538,6 +1576,10 @@ def scan(url: str, proxy: str | None, log, cookies: str = "",
          no_video_msg: str = "", cookies_msg: str = "",
          workers: int = PARALLEL, quiet: bool = False,
          scanning_msg: str = "") -> list[Item]:
+    # A pasted link gets the same treatment as one found on a page: an arXiv
+    # abstract or a Drive share is a page about a file, and the file is what
+    # was wanted.
+    url = direct_link(url)
     # log() here is the status line, so it is read by whoever is waiting:
     # the name of the tool doing the work is not what they are waiting for.
     log(scanning_msg or "asking yt-dlp...")
@@ -3712,6 +3754,18 @@ def selftest():
     assert "not there" in http_reason(404) and "not there" in http_reason(410)
     assert http_reason(451), "the one status code with a novel behind it"
     assert http_reason(200) == "" and http_reason(500) == "",         "only the ones with something to do about them"
+
+    # four links that hand you a page when the file is what you asked for
+    assert direct_link("https://e.gr/pdfjs/web/viewer.html?file=%2Fdoc%2Fl3.pdf") ==         "https://e.gr/doc/l3.pdf", "PDF.js keeps the pdf in its own query string"
+    assert direct_link("https://arxiv.org/abs/2401.12345") ==         "https://arxiv.org/pdf/2401.12345.pdf"
+    assert direct_link("https://www.dropbox.com/s/abc/notes.pdf?dl=0").endswith("dl=1")
+    assert direct_link("https://www.dropbox.com/scl/fi/x/notes.pdf").endswith("dl=1"),         "no dl at all means the preview page"
+    assert direct_link("https://drive.google.com/file/d/1AbC/view?usp=sharing") ==         "https://drive.google.com/uc?export=download&id=1AbC"
+    assert direct_link("https://drive.google.com/open?id=1AbC") ==         "https://drive.google.com/uc?export=download&id=1AbC"
+    # and everything else is left exactly as it was found
+    for _plain in ("https://x.com/clip.mp4", "https://arxiv.org/pdf/9.pdf",
+                   "https://x.com/viewer.html", "https://drive.google.com/"):
+        assert direct_link(_plain) == _plain, _plain
 
     # a stream is a playlist of segments, not a file: saving the manifest gets
     # a page of text listing the video. yt-dlp follows one, so they are its

@@ -95,6 +95,11 @@ ANSI = re.compile(r"\x1b\[[0-9;]*m")
 # wants to queue a 5000-video channel.
 MAX_ENTRIES = 200
 
+# One paste, one scan each. A cap because a pasted wall of text is a mistake
+# rather than a plan, and thirty scans is a long time to have taken the window
+# away from somebody.
+MAX_LINKS = 30
+
 # Tries per item, including the first. Retries resume from the .part file, so a
 # second attempt continues rather than restarting.
 ATTEMPTS = 3
@@ -739,6 +744,30 @@ def tor_proxy(host: str = "127.0.0.1", ports: tuple[int, ...] = TOR_PORTS,
 
 
 PROXY_SCHEMES = ("http://", "https://", "socks4://", "socks5://", "socks5h://")
+
+
+def split_links(text: str) -> list[str]:
+    """Every link in what was pasted, in the order they were written.
+
+    A semester of lectures is ten links, and scanning them was ten rounds of
+    paste, scan, tick, download. Whitespace separates them - a multi-line paste
+    arrives in a one-line box as spaces anyway - and anything that is not a
+    link is left out rather than guessed at.
+    """
+    out = []
+    for word in (text or "").split():
+        word = word.strip().rstrip(",;")
+        if not word:
+            continue
+        if not word.startswith(("http://", "https://")):
+            if "." not in word.split("/")[0]:
+                continue          # not a host: a word that wandered in
+            word = "https://" + word
+        if word not in out:
+            out.append(word)
+        if len(out) >= MAX_LINKS:
+            break
+    return out
 
 
 def normalise_proxy(text: str) -> str | None:
@@ -3225,14 +3254,13 @@ class App:
     def do_scan(self):
         if self.busy:
             return
-        url = self.url.get().strip()
-        if not url:
+        links = split_links(self.url.get())
+        if not links:
             self.say(self.t("paste_first"), C["amber"])
             return
-        if not url.startswith(("http://", "https://")):
-            url = "https://" + url
-            self.url.delete(0, "end")
-            self.url.insert(0, url)
+        if len(links) == 1 and links[0] != self.url.get().strip():
+            self.url.delete(0, "end")      # https:// filled in for them
+            self.url.insert(0, links[0])
         self.set_busy(True)
         self.scanning = True
         self.new_circuit()
@@ -3242,7 +3270,7 @@ class App:
         self.marked.clear()
         self.sized.clear()
         self.stop_btn.pack(side="left", padx=(6, 0))
-        threading.Thread(target=self._scan_worker, args=(url, self.scan_token),
+        threading.Thread(target=self._scan_worker, args=(links, self.scan_token),
                          daemon=True).start()
 
     def _update_checks(self, proxy):
@@ -3250,8 +3278,10 @@ class App:
         update_ytdlp(self.log, proxy)
         newer_release(self.log, proxy)
 
-    def _scan_worker(self, url, token):
-        self.log(f"scan {url}")
+    def _scan_worker(self, links, token):
+        if isinstance(links, str):
+            links = [links]
+        self.log("scan " + " ".join(links))
         if not self.ytdlp_checked:
             # Deliberately here rather than at launch: this way it goes out the
             # same way the scan does, and only once somebody is actually
@@ -3259,30 +3289,53 @@ class App:
             self.ytdlp_checked = True
             threading.Thread(target=self._update_checks, args=(self.proxy(),),
                              daemon=True).start()
+        found: list[Item] = []
+        seen: set[str] = set()
+        failed = 0
         try:
-            items = scan(url, self.proxy(), self.say,
-                         self.cookies(),
-                         self.t("no_video", site=urlparse(url).netloc),
-                         self.t("try_cookies"), self.workers(),
-                         bool(self.quiet_var.get()), self.t("scanning"))
+            for number, url in enumerate(links, 1):
+                if token != self.scan_token:
+                    self.log("scan stopped, the rest of the links dropped", "warn")
+                    return
+                if len(links) > 1:
+                    # Which of them is being waited for, rather than a status
+                    # line that says the same thing for four minutes.
+                    self.say(self.t("scanning_n", n=number, total=len(links)),
+                             C["dim"])
+                try:
+                    part = scan(url, self.proxy(), self.say,
+                                self.cookies(),
+                                self.t("no_video", site=urlparse(url).netloc),
+                                self.t("try_cookies"), self.workers(),
+                                bool(self.quiet_var.get()), self.t("scanning"))
+                except Exception as exc:
+                    # One bad link out of ten must not take the other nine with
+                    # it: it is said, and the scan carries on.
+                    failed += 1
+                    self.log(f"scan failed :: {url} :: {exc}", "error")
+                    if len(links) == 1:
+                        self.say(self.t("scan_failed", err=exc), C["red"])
+                        self.log(traceback.format_exc().rstrip(), "error")
+                    continue
+                for it in part:
+                    if it.url not in seen:
+                        seen.add(it.url)
+                        found.append(it)
+                self.new_circuit()      # a link each, a circuit each
+
             if token != self.scan_token:
-                self.log(f"scan finished after being stopped, result dropped "
-                         f":: {url}", "warn")
+                self.log("scan finished after being stopped, result dropped",
+                         "warn")
                 return
-            self.q.put(("items", items, None))
-            if items:
-                self.log(f"found {len(items)} items", "ok")
-                self.say(self.t("found", n=len(items)), C["green"])
+            self.q.put(("items", found, None))
+            if found:
+                self.log(f"found {len(found)} items", "ok")
+                self.say(self.t("found", n=len(found)), C["green"])
+            elif failed and failed == len(links):
+                pass                    # already said, in red, above
             else:
                 self.log("nothing downloadable found at this link", "warn")
                 self.say(self.t("nothing_found"), C["amber"])
-        except Exception as exc:
-            if token != self.scan_token:
-                self.log(f"stopped scan failed on its way out :: {exc}", "warn")
-                return
-            self.say(self.t("scan_failed", err=exc), C["red"])
-            self.log(f"scan failed :: {exc}", "error")
-            self.log(traceback.format_exc().rstrip(), "error")
         finally:
             # A stopped scan already handed the window back; saying so again
             # here would undo whatever the user started in the meantime.
@@ -3924,6 +3977,16 @@ def selftest():
     assert not already_here(folder, Item("https://h/w", "Lecture 4", "video",
                                          via="ytdlp"))
     assert not already_here(set(), Item("https://h/clip.mp4", "clip.mp4", "video"))
+
+    # one paste, every link in it - a semester of lectures is ten links, and
+    # scanning them was ten rounds of paste, scan, tick, download
+    assert split_links("https://a.gr/1  https://b.gr/2") ==         ["https://a.gr/1", "https://b.gr/2"]
+    assert split_links("a.gr/1\nb.gr/2") == ["https://a.gr/1", "https://b.gr/2"]
+    assert split_links("https://a.gr/1, https://a.gr/1") == ["https://a.gr/1"],         "the same link twice is one scan"
+    assert split_links("  ") == [] and split_links(None) == []
+    assert split_links("hello there") == [], "words are not links"
+    assert split_links("look at https://a.gr/x please") == ["https://a.gr/x"],         "a link inside a sentence still counts"
+    assert len(split_links(" ".join(f"https://a.gr/{n}" for n in range(60)))) ==         MAX_LINKS, "a pasted wall of text is a mistake, not a plan"
 
     # the proxy box: a bare host:port is a socks proxy, junk is nothing, and
     # socks5 becomes socks5h so the name is resolved at the far end

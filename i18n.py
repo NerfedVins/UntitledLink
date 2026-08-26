@@ -77,6 +77,12 @@ STRINGS = {
                          "as srt. Beside the file rather than inside it,\n"
                          "so a text editor can open it.",
         "have_already": "already here",
+        "dlg_folders": "a folder per page",
+        "dlg_folders_hint": "Off by default. Files from one page land in a\n"
+                            "folder named after it, instead of forty\n"
+                            "handouts loose among everything else you have\n"
+                            "ever downloaded. For a single video a folder\n"
+                            "of its own is clutter, which is why it is off.",
         "dlg_route": "test the route",
         "route_checking": "asking...",
         "route_none": "no route set :: the site sees your own address",
@@ -210,6 +216,12 @@ STRINGS = {
                          "δίνουν vtt το ίδιο συχνά. Δίπλα στο αρχείο, όχι\n"
                          "μέσα του, ώστε να ανοίγει με επεξεργαστή κειμένου.",
         "have_already": "το έχεις ήδη",
+        "dlg_folders": "φάκελος ανά σελίδα",
+        "dlg_folders_hint": "Ανενεργό εξ ορισμού. Τα αρχεία μιας σελίδας\n"
+                            "μπαίνουν σε φάκελο με το όνομά της, αντί για\n"
+                            "σαράντα αρχεία χύμα ανάμεσα σε ό,τι έχεις\n"
+                            "κατεβάσει ποτέ. Για ένα βίντεο, ξεχωριστός\n"
+                            "φάκελος είναι σκουπίδι - γι' αυτό είναι σβηστό.",
         "dlg_route": "δοκιμή διαδρομής",
         "route_checking": "ρωτάω...",
         "route_none": "καμία διαδρομή :: το site βλέπει τη διεύθυνσή σου",

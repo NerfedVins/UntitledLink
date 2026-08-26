@@ -605,10 +605,11 @@ class Item:
     """
 
     __slots__ = ("url", "name", "kind", "quality", "res", "length", "size",
-                 "via", "fmt", "thumb", "info", "details", "page")
+                 "via", "fmt", "thumb", "info", "details", "page", "folder")
 
     def __init__(self, url, name, kind, size=0, via="file", fmt=None, thumb=None,
-                 info="", details="", quality="", length="", res="", page=""):
+                 info="", details="", quality="", length="", res="", page="",
+                 folder=""):
         self.url, self.name, self.kind = url, name, kind
         self.quality = quality  # "1080p mp4", "mp3 320k" - display only
         self.res = res          # "1080x1920"; a column, not a word inside info
@@ -622,6 +623,10 @@ class Item:
         # hand over a file only to a request that says which page asked for it,
         # and refuse everything else with a 403 that looks like a dead link.
         self.page = page
+        # What the page called itself, kept as a folder name. Forty files from
+        # one lecture page land together instead of loose among everything
+        # else that was ever downloaded.
+        self.folder = folder
 
 
 def checkbox_images(size: int = CHECKBOX) -> dict:
@@ -1266,10 +1271,13 @@ def scrape_page(url: str, proxy: str | None, log, embeds: bool = True,
     # A manifest is usually called index.m3u8 or master.m3u8, which says
     # nothing about what it is; the page's own title does.
     titled = (soup.title.get_text().strip() if soup.title else "") or ""
+    # A page title is a sentence often enough - "Course 3 | Lectures | Uni" -
+    # so it is cut to something that reads as a folder.
+    holder = safe_name(titled.split("|")[0].split(" - ")[0].strip()[:60])
     items = [Item(u,
                   (safe_name(titled) if u in streams and titled
                    else offered.get(u) or name_from_url(u)),
-                  k, thumb=u if k == "image" else None, page=url,
+                  k, thumb=u if k == "image" else None, page=url, folder=holder,
                   via="ytdlp" if u in streams else "file",
                   quality="as set" if u in streams else "",
                   info="HLS" if u.lower().endswith(".m3u8") else
@@ -1863,6 +1871,23 @@ def resume_plan(have: int, status: int, length: int) -> tuple[str, int, int]:
     return "wb", 0, length
 
 
+def target_dir(outdir: str, it: Item, grouped: bool) -> str:
+    """Where this row lands: the download folder, or a folder of its own.
+
+    Made here rather than at the start of a batch, because a scan of ten links
+    has ten pages in it and only the ones that produced a download need a
+    folder.
+    """
+    if not grouped or not it.folder:
+        return outdir
+    nested = os.path.join(outdir, it.folder)
+    try:
+        os.makedirs(nested, exist_ok=True)
+    except OSError:
+        return outdir          # unwritable: the download still happens
+    return nested
+
+
 def download_file(it: Item, outdir: str, proxy: str | None, clean: bool,
                   progress, attempt: int = 1) -> str:
     s = session_for(proxy)
@@ -2096,6 +2121,10 @@ class App:
         # are not lectures. On, it is the only part of a video that a text
         # search can reach.
         self.subs_var = tk.BooleanVar(value=bool(self.prefs.get("subtitles", False)))
+        # Off by default: for one video a folder of its own is clutter. On, a
+        # page of forty handouts lands together under the page's own name.
+        self.folders_var = tk.BooleanVar(
+            value=bool(self.prefs.get("subfolders", False)))
         self.private_var = tk.BooleanVar(value=False)
         self.private_var.trace_add("write", lambda *_: self.apply_private())
         # Not remembered either, and for a plainer reason than private mode:
@@ -2201,6 +2230,7 @@ class App:
             "double_click_downloads": bool(self.dblclick_var.get()),
             "quiet_scan": bool(self.quiet_var.get()),
             "subtitles": bool(self.subs_var.get()),
+            "subfolders": bool(self.folders_var.get()),
             "attempts": self.attempts(),
             "parallel": self.workers(),
         })
@@ -3199,6 +3229,9 @@ class App:
         self.switch(body, "dlg_subs", self.subs_var)
         hint(self.t("dlg_subs_hint"))
 
+        self.switch(body, "dlg_folders", self.folders_var)
+        hint(self.t("dlg_folders_hint"))
+
         head(self.t("dlg_parallel"))
         tk.Spinbox(body, from_=1, to=MAX_PARALLEL, width=5,
                    textvariable=self.parallel_var,
@@ -3308,7 +3341,8 @@ class App:
         touched = (self.outdir_var, self.proxy_var, self.quality_var,
                    self.cookies_var, self.clean_var, self.private_var,
                    self.tor_var, self.dblclick_var, self.quiet_var,
-                   self.subs_var, self.parallel_var, self.attempts_var)
+                   self.subs_var, self.folders_var, self.parallel_var,
+                   self.attempts_var)
         before = [v.get() for v in touched]
 
         def cancel():
@@ -3541,11 +3575,12 @@ class App:
             args=(picks, outdir, self.proxy(),
                   self.quality_var.get(), self.clean_var.get(),
                   self.cookies(), self.workers(), self.attempts(),
-                  self.t.lang if self.subs_var.get() else ""),
+                  self.t.lang if self.subs_var.get() else "",
+                  bool(self.folders_var.get())),
             daemon=True).start()
 
     def _dl_worker(self, picks, outdir, proxy, quality, clean, cookies="",
-                   workers=PARALLEL, tries=ATTEMPTS, subs=""):
+                   workers=PARALLEL, tries=ATTEMPTS, subs="", grouped=False):
         from concurrent.futures import ThreadPoolExecutor
 
         total_items = len(picks)
@@ -3616,12 +3651,13 @@ class App:
             try:
                 for attempt in range(1, tries + 1):
                     try:
+                        where = target_dir(outdir, it, grouped)
                         if it.via == "ytdlp":
-                            download_media(it, outdir, proxy, quality, clean,
+                            download_media(it, where, proxy, quality, clean,
                                            progress, cookies, subs)
                         else:
                             with host_slot(it.url):
-                                download_file(it, outdir, proxy, clean, progress,
+                                download_file(it, where, proxy, clean, progress,
                                               attempt)
                         with lock:
                             tally["ok"] += 1
@@ -4184,6 +4220,16 @@ def selftest():
     assert not already_here(folder, Item("https://h/w", "Lecture 4", "video",
                                          via="ytdlp"))
     assert not already_here(set(), Item("https://h/clip.mp4", "clip.mp4", "video"))
+
+    # a folder per page: forty handouts from one lecture land together, and a
+    # single video does not get a folder of its own unless asked
+    grouped_dir = tempfile.mkdtemp()
+    lecture = Item("https://h/a.pdf", "a.pdf", "doc", folder="Lecture 7")
+    loose = Item("https://h/b.pdf", "b.pdf", "doc")
+    assert target_dir(grouped_dir, lecture, False) == grouped_dir, "the setting is off"
+    made = target_dir(grouped_dir, lecture, True)
+    assert made == os.path.join(grouped_dir, "Lecture 7") and os.path.isdir(made)
+    assert target_dir(grouped_dir, loose, True) == grouped_dir,         "a row with no page title has no folder to go in"
 
     # sorting keys read the item, not the cell: "900B" after "2.0K" is what
     # sorting the text gets you, and TYPE is a word that changes with language

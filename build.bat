@@ -31,7 +31,13 @@ REM support" the first time anyone ticked the box.
 REM
 REM ffprobe is deliberately not bundled: nothing in this app calls it, and it
 REM is another 100 MB of exe for nothing.
+REM --icon paints the exe in Explorer; --add-data carries the same artwork
+REM inside, because the window asks for it again at runtime and a frozen build
+REM has no source folder to read it from.
 pyinstaller --noconfirm --onefile --windowed --name UntitledLink ^
+    --icon icon.ico ^
+    --add-data "icon.ico;." ^
+    --add-data "icon.png;." ^
     --collect-all yt_dlp ^
     --collect-all imageio_ffmpeg ^
     --collect-all certifi ^

@@ -206,6 +206,15 @@ def warm_imports() -> None:
         pass                       # the real import will report it properly
 
 
+def resource(name: str) -> str:
+    """A file that ships with the app: beside it, or unpacked inside the exe.
+
+    PyInstaller extracts what it carries into a temporary folder and points
+    sys._MEIPASS at it, so the icon is not where the source tree keeps it.
+    """
+    return os.path.join(getattr(sys, "_MEIPASS", APP_DIR), name)
+
+
 def _data_dir() -> str:
     """Where settings and a fetched ffmpeg live.
 
@@ -1956,6 +1965,16 @@ class App:
         self.scan_token = 0
 
         root.title(f"{APP} {VERSION}")
+        try:
+            # .ico is the only thing Windows takes for a title bar and a task
+            # bar; everywhere else Tk wants the image itself.
+            if os.name == "nt":
+                root.iconbitmap(resource("icon.ico"))
+            else:
+                self.icon = tk.PhotoImage(file=resource("icon.png"))
+                root.iconphoto(True, self.icon)
+        except Exception:
+            pass       # an icon is not worth refusing to open a window over
         root.configure(bg=C["bg"])
         root.geometry("1140x700")
         root.minsize(940, 540)
@@ -4053,6 +4072,11 @@ def selftest():
     # ffmpeg arrives as a wheel now; the downloader and its button are gone
     assert "fetch_ffmpeg" not in globals(), "the runtime downloader came back"
     assert ffmpeg_path(), "no ffmpeg anywhere - is imageio-ffmpeg installed?"
+
+    # the icon has to travel with the app, and a frozen build that forgot to
+    # carry it is a window with a feather on it and no way to tell from here
+    for _art in ("icon.ico", "icon.png"):
+        assert os.path.exists(resource(_art)), f"{_art} did not ship"
 
     # a .part nobody will finish is litter; one that can still resume is not
     tmpdir = tempfile.mkdtemp()

@@ -805,6 +805,32 @@ DOWNLOAD_HINTS = ("download", "attachment", "getfile", "get_file", "/dl/",
                   "file.php", "fileid=", "file_id=", "docid=", "attach")
 
 
+# A stream is served as a playlist of segments, not as a file: .m3u8 for HLS,
+# .mpd for DASH. Saving the manifest gets you a two-kilobyte text file that
+# lists the video, which is why these never belonged in the extension table.
+# yt-dlp knows how to follow one and hand back a single playable file, so they
+# are collected as its rows rather than as downloads.
+STREAM_EXT = (".m3u8", ".mpd")
+
+
+# Quoted paths that end in something this app can name, wherever they are
+# written: a script, a data attribute, an inline style. Built from the
+# extension table so the two cannot drift apart, and quoted so it matches an
+# address rather than any word ending in .mp4 in a sentence. Relative paths
+# count - a player config says "/stream.m3u8" far more often than it spells
+# out the host.
+def _asset_pattern() -> "re.Pattern":
+    exts = "|".join(sorted((e.lstrip(".") for e in
+                            list(EXT_KIND) + list(STREAM_EXT)), key=len,
+                           reverse=True))
+    return re.compile(r"""['"]([^'"<>\s]{2,300}?\.(?:%s)(?:\?[^'"]{0,200})?)['"]"""
+                      % exts, re.I)
+
+
+def is_stream(url: str) -> bool:
+    return os.path.splitext(urlparse(url).path)[1].lower() in STREAM_EXT
+
+
 def better_name(current: str, offered: str) -> str:
     """Prefer the name the server offered, when the one we have is a page.
 
@@ -945,6 +971,10 @@ def probe_all(items: list[Item], s: requests.Session,
     from concurrent.futures import ThreadPoolExecutor
 
     def probe(it: Item):
+        if it.via == "ytdlp":
+            # A manifest has a size of its own and it means nothing: two
+            # kilobytes of text listing an hour of video.
+            return it
         it.size, ctype, offered = head(s, it.url, it.page)
         if "html" in ctype:
             return None
@@ -964,6 +994,9 @@ def probe_all(items: list[Item], s: requests.Session,
         probed = [it for it in pool.map(probe, items) if it]
     # two thumbnails can resolve to the same original, so dedupe after upgrading
     return list({it.url: it for it in probed}.values())
+
+
+ASSET_RE = _asset_pattern()
 
 
 # Built once. Listing them is cheap, but matching a URL walks all 1751 of them,
@@ -1043,11 +1076,16 @@ def scrape_page(url: str, proxy: str | None, log, embeds: bool = True,
     soup = BeautifulSoup(body, "html.parser")
     found: dict[str, str] = {}
     offered: dict[str, str] = {}     # url -> the name the page suggested
+    streams: set[str] = set()        # manifests, which yt-dlp downloads
 
     def add(raw, forced: str = "", name: str = ""):
         if not raw or raw.startswith(("data:", "javascript:", "#")):
             return
         full = urljoin(url, raw.strip()).split("#")[0]
+        if is_stream(full):
+            streams.add(full)
+            found.setdefault(full, "video")
+            return
         kind = (forced or kind_of(full)
                 or ("file" if looks_like_download(full) else ""))
         if kind:
@@ -1081,11 +1119,26 @@ def scrape_page(url: str, proxy: str | None, log, embeds: bool = True,
     text = text.replace("&amp;", "&")
     for match in re.finditer(r"""https?://[^\s"'<>\)]{4,}""", text):
         add(match.group(0))
+    for match in ASSET_RE.finditer(text):
+        # A slash is what separates an address from a name: download="Notes.pdf"
+        # and alt="photo.jpg" are labels, and joining them to the page invents
+        # a link that was never there.
+        if "/" in match.group(1):
+            add(match.group(1))
     for match in re.finditer(r"""url\(\s*['"]?([^)'"]+)""", text):
         add(match.group(1))
 
-    items = [Item(u, offered.get(u) or name_from_url(u), k,
-                  thumb=u if k == "image" else None, page=url)
+    # A manifest is usually called index.m3u8 or master.m3u8, which says
+    # nothing about what it is; the page's own title does.
+    titled = (soup.title.get_text().strip() if soup.title else "") or ""
+    items = [Item(u,
+                  (safe_name(titled) if u in streams and titled
+                   else offered.get(u) or name_from_url(u)),
+                  k, thumb=u if k == "image" else None, page=url,
+                  via="ytdlp" if u in streams else "file",
+                  quality="as set" if u in streams else "",
+                  info="HLS" if u.lower().endswith(".m3u8") else
+                       ("DASH" if u in streams else ""))
              for u, k in found.items()]
     if quiet:
         # Nothing is probed, so nothing can be dropped either: a link that ends
@@ -3460,6 +3513,10 @@ def selftest():
         assert "escaped.mp4" in names, "escaped slashes in JSON were missed"
         assert "shot.png" in names, "a css background was missed"
         assert "Notes.pdf" in names,             "download= names the file, and the page said so"
+        # ...but that name is a label, not a path: joining it to the page would
+        # invent http://host/Notes.pdf, which nothing ever linked to
+        named = [i for i in quiet if i.name == "Notes.pdf"]
+        assert len(named) == 1 and "get.php" in named[0].url, named[0].url
         assert not any("about" in n for n in names), "an ordinary page link"
         assert not heads, f"discreet scan probed {heads}"
         assert all(it.size == 0 for it in quiet), "sizes must wait to be asked for"
@@ -3655,6 +3712,13 @@ def selftest():
     assert "not there" in http_reason(404) and "not there" in http_reason(410)
     assert http_reason(451), "the one status code with a novel behind it"
     assert http_reason(200) == "" and http_reason(500) == "",         "only the ones with something to do about them"
+
+    # a stream is a playlist of segments, not a file: saving the manifest gets
+    # a page of text listing the video. yt-dlp follows one, so they are its
+    # rows rather than downloads.
+    assert is_stream("https://h/live/master.m3u8") and is_stream("https://h/v.mpd")
+    assert not is_stream("https://h/clip.mp4") and not is_stream("https://h/p")
+    assert kind_of("https://h/master.m3u8") is None,         "a manifest must never look like a file to download directly"
 
     # a link with no extension can still be a file: eClass and Moodle serve
     # everything through a php page, and collecting by extension alone meant a

@@ -1,6 +1,18 @@
 # UntitledLink
 
+[![selftest](https://github.com/NerfedVins/UntitledLink/actions/workflows/selftest.yml/badge.svg)](https://github.com/NerfedVins/UntitledLink/actions/workflows/selftest.yml)
+
 Paste a link, see what is downloadable, take it clean.
+
+## Get it
+
+Download **`UntitledLink.exe`** from
+[Releases](https://github.com/NerfedVins/UntitledLink/releases) and double-click
+it. Nothing to install: Python, yt-dlp and ffmpeg are all inside.
+
+Windows shows a SmartScreen warning the first time, because the exe is not
+signed with a paid certificate: **More info → Run anyway**. Every release lists
+a SHA-256 if you would rather check what you downloaded first.
 
 ## Run
 
@@ -25,6 +37,21 @@ one thing a .bat cannot be trimmed out of.
 A terminal appears on purpose in one case: something needs installing. That is
 worth watching, so the quiet launcher re-runs the batch in a real console where
 pip can say what it is doing.
+
+### macOS and Linux
+
+There is no bundle for either, but the app itself runs on both: the suite,
+including the one that builds a real window, passes on macOS in CI on every
+push.
+
+```bash
+pip install -r requirements.txt
+python3 untitledlink.py
+```
+
+tkinter is the one thing to watch on macOS - Apple's own Python ships a version
+too old to use. A python.org build, or `brew install python-tk`, sorts it. The
+`.bat` and `.vbs` launchers are Windows-only; everywhere else, run the file.
 
 yt-dlp refreshes itself from inside the app, on the first scan rather than at
 launch - it breaks whenever a site changes its markup, so a copy that worked

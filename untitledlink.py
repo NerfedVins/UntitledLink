@@ -33,7 +33,7 @@ from urllib.parse import urljoin, urlparse, unquote, parse_qs, urlencode
 from i18n import COOKIE_BROWSERS, LANGUAGES, NO_COOKIES, Tr
 
 APP = "UntitledLink"
-VERSION = "0.1.0"
+VERSION = "0.1.1"
 
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")
@@ -367,6 +367,38 @@ def installed_version(package: str) -> str:
         return version(package)
     except Exception:
         return ""
+
+
+# Where a newer version of this app would be announced. Asked once, on the
+# first scan, through whatever route that scan is using - at launch it would be
+# the one connection that ignored the proxy, and the app has no business
+# telling GitHub it started up before the user has asked for anything.
+RELEASES_API = "https://api.github.com/repos/NerfedVins/UntitledLink/releases/latest"
+
+
+def version_tuple(text: str) -> tuple[int, ...]:
+    """1.2.10 -> (1, 2, 10). Anything unparseable sorts as nothing at all."""
+    parts = re.findall(r"\d+", text or "")
+    return tuple(int(p) for p in parts[:4])
+
+
+def newer_release(log, proxy: str | None = None, current: str = VERSION) -> str:
+    """The tag of a newer release, or "" - and "" for every kind of silence.
+
+    A version check that cannot reach the internet has learned nothing, so it
+    says nothing: the alternative is a window claiming to be up to date on the
+    strength of a failed request.
+    """
+    try:
+        tag = str(session_for(proxy).get(
+            RELEASES_API, timeout=20).json().get("tag_name") or "")
+    except Exception:
+        return ""
+    if version_tuple(tag) > version_tuple(current):
+        log(f"a newer version is out: {tag} - "
+            f"https://github.com/NerfedVins/UntitledLink/releases/latest")
+        return tag
+    return ""
 
 
 def update_ytdlp(log, proxy: str | None = None) -> None:
@@ -3191,6 +3223,11 @@ class App:
         threading.Thread(target=self._scan_worker, args=(url, self.scan_token),
                          daemon=True).start()
 
+    def _update_checks(self, proxy):
+        """Both questions about versions, asked once and out of the way."""
+        update_ytdlp(self.log, proxy)
+        newer_release(self.log, proxy)
+
     def _scan_worker(self, url, token):
         self.log(f"scan {url}")
         if not self.ytdlp_checked:
@@ -3198,7 +3235,7 @@ class App:
             # same way the scan does, and only once somebody is actually
             # scanning something.
             self.ytdlp_checked = True
-            threading.Thread(target=update_ytdlp, args=(self.log, self.proxy()),
+            threading.Thread(target=self._update_checks, args=(self.proxy(),),
                              daemon=True).start()
         try:
             items = scan(url, self.proxy(), self.say,
@@ -3756,6 +3793,35 @@ def selftest():
     assert better_name("view", "notes.pdf") == "notes.pdf", "no extension at all"
     assert better_name("clip.mp4", "tracking.mp4") == "clip.mp4",         "a real filename is not overruled by a header"
     assert better_name("index.php", "") == "index.php", "nothing offered"
+
+    # a version check that could not reach the internet has learned nothing,
+    # and has to say nothing rather than "you are up to date"
+    said = []
+    keep_session = session_for
+
+    class _Release:
+        def __init__(self, tag):
+            self.tag = tag
+
+        def get(self, url, **kw):
+            if self.tag is None:
+                raise requests.ConnectionError("no route")
+            return type("R", (), {"json": lambda _s, t=self.tag: {"tag_name": t}})()
+
+    try:
+        globals()["session_for"] = lambda proxy=None: _Release(None)
+        assert newer_release(said.append) == "" and not said, said
+        globals()["session_for"] = lambda proxy=None: _Release("v0.0.1")
+        assert newer_release(said.append) == "" and not said, "older is not newer"
+        globals()["session_for"] = lambda proxy=None: _Release(f"v{VERSION}")
+        assert newer_release(said.append) == "" and not said, "the same is not newer"
+        globals()["session_for"] = lambda proxy=None: _Release("v99.0.0")
+        assert newer_release(said.append) == "v99.0.0" and said
+        assert "releases/latest" in said[-1], "and it says where to get it"
+    finally:
+        globals()["session_for"] = keep_session
+    assert version_tuple("1.2.10") > version_tuple("1.2.9"), "not a string compare"
+    assert version_tuple("v0.1.0") == (0, 1, 0) and version_tuple("") == ()
 
     # a status code, said to somebody waiting for a file
     assert "login" in http_reason(403) and "403" in http_reason(403)

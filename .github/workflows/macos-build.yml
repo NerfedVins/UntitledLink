@@ -1,0 +1,58 @@
+# A .app for macOS, built by a mac, because only a mac can build one - and
+# there is no mac here. It runs when a release is published and attaches the
+# bundle to that release, so the Windows exe and the mac app come from the same
+# tag and cannot drift apart.
+name: macos build
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  app:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install
+        run: python -m pip install -r requirements.txt pyinstaller pyinstaller-hooks-contrib
+
+      - name: Prove it runs before bundling it
+        run: python untitledlink.py --selftest
+
+      # macOS wants an .icns, which is a folder of sizes turned into one file
+      # by a tool that only exists here.
+      - name: Icon
+        run: |
+          mkdir icon.iconset
+          for size in 16 32 128 256 512; do
+            sips -z $size $size icon.png --out icon.iconset/icon_${size}x${size}.png
+            sips -z $((size * 2)) $((size * 2)) icon.png --out icon.iconset/icon_${size}x${size}@2x.png
+          done
+          iconutil -c icns icon.iconset -o icon.icns
+
+      # No --onefile: a .app is a folder, and macOS expects it that way.
+      - name: Build
+        run: |
+          pyinstaller --noconfirm --windowed --name UntitledLink \
+            --icon icon.icns \
+            --collect-all yt_dlp \
+            --collect-all imageio_ffmpeg \
+            --collect-all certifi \
+            --add-data "icon.png:." \
+            --add-data "icon.ico:." \
+            untitledlink.py
+
+      - name: Zip the bundle
+        run: ditto -c -k --keepParent dist/UntitledLink.app UntitledLink-macos.zip
+
+      - name: Attach it to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload ${{ github.event.release.tag_name }} UntitledLink-macos.zip --clobber

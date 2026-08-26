@@ -1015,6 +1015,11 @@ def scrape_page(url: str, proxy: str | None, log, embeds: bool = True,
     s = session_for(proxy)
     # streamed so the body can be read in a bounded slice below
     r = s.get(url, timeout=25, stream=True)
+    spoken = http_reason(r.status_code, TOR_MODE)
+    if spoken:
+        # This one reaches the status line, where "403 Client Error: Forbidden
+        # for url: https://..." told nobody anything they could act on.
+        raise RuntimeError(f"{urlparse(url).netloc} {spoken}")
     r.raise_for_status()
     if "html" not in r.headers.get("content-type", ""):
         size = int(r.headers.get("content-length") or 0)
@@ -1562,6 +1567,27 @@ def unique_path(path: str) -> str:
     return f"{stem} ({n}){ext}"
 
 
+def http_reason(status: int, over_tor: bool = False) -> str:
+    """What a status code means to somebody waiting for a file.
+
+    "403 Client Error: Forbidden for url: https://..." is the protocol talking
+    to itself. These four are the ones worth translating, because each points
+    at a different thing to do next - and a refusal while tor is on usually
+    means the exit node, not the account.
+    """
+    if status in (401, 403):
+        if over_tor:
+            return (f"refused ({status}) - sites often turn away tor exit "
+                    f"nodes; try without tor, or scan again for a new circuit")
+        return (f"refused ({status}) - it may want a login: turn on browser "
+                f"cookies in settings")
+    if status in (404, 410):
+        return f"not there any more ({status})"
+    if status == 451:
+        return f"blocked for legal reasons ({status})"
+    return ""
+
+
 class Permanent(Exception):
     """A failure retrying cannot fix - do not burn attempts on it."""
 
@@ -1632,6 +1658,10 @@ def download_file(it: Item, outdir: str, proxy: str | None, clean: bool,
             done = have
             mode, total = "ab", have
         else:
+            # Said in words before the protocol says it in numbers.
+            spoken = http_reason(r.status_code, TOR_MODE)
+            if spoken:
+                raise Permanent(spoken)
             r.raise_for_status()
             # Saving a pdf as index.php because that is what the link looked
             # like is the same mistake twice: the header knows better. Kept
@@ -3557,6 +3587,14 @@ def selftest():
     assert better_name("view", "notes.pdf") == "notes.pdf", "no extension at all"
     assert better_name("clip.mp4", "tracking.mp4") == "clip.mp4",         "a real filename is not overruled by a header"
     assert better_name("index.php", "") == "index.php", "nothing offered"
+
+    # a status code, said to somebody waiting for a file
+    assert "login" in http_reason(403) and "403" in http_reason(403)
+    assert "tor exit" in http_reason(403, over_tor=True),         "over tor a refusal is usually the exit node, not the account"
+    assert http_reason(401), "a login wall is worth the same words"
+    assert "not there" in http_reason(404) and "not there" in http_reason(410)
+    assert http_reason(451), "the one status code with a novel behind it"
+    assert http_reason(200) == "" and http_reason(500) == "",         "only the ones with something to do about them"
 
     # a link with no extension can still be a file: eClass and Moodle serve
     # everything through a php page, and collecting by extension alone meant a

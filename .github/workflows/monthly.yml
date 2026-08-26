@@ -1,14 +1,27 @@
 # yt-dlp is what rots. Sites change their markup, yt-dlp ships a fix within
-# days, and an exe cannot pip into itself - so a build left alone slowly stops
-# working on the sites that change most. This bumps the patch version once a
-# month and tags it, which sets the release workflow going with whatever yt-dlp
-# is current that day. The app tells its users a newer version exists.
-name: monthly refresh
+# days, and a frozen exe cannot pip into itself - so a build left alone slowly
+# stops working on the sites that change most.
+#
+# Once a month this cuts a fresh build on its own. It also takes a manual run,
+# for the day something breaks on the 5th and waiting three weeks is absurd:
+# Actions -> fresh build -> Run workflow, type go, choose whether the version
+# moves.
+name: fresh build
 
 on:
   schedule:
     - cron: "0 5 1 * *"      # the first of the month, 05:00 UTC
   workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type "go" to build and publish a fresh release now'
+        required: true
+        default: ""
+      bump:
+        description: "patch = 0.1.2 becomes 0.1.3 and everyone is told; none = same version, binaries replaced quietly"
+        type: choice
+        default: patch
+        options: [patch, none]
 
 permissions:
   contents: write
@@ -17,14 +30,38 @@ jobs:
   bump:
     runs-on: ubuntu-latest
     steps:
+      - name: A release is not something to publish by a stray click
+        if: github.event_name == 'workflow_dispatch' && inputs.confirm != 'go'
+        run: |
+          echo "::error::type go in the confirm field to publish a release"
+          exit 1
+
       - uses: actions/checkout@v4
-      - name: Bump the patch number and tag it
+
+      - name: Move the version, or do not
+        id: version
         run: |
           old=$(grep -oP '(?<=^VERSION = ")[0-9.]+' untitledlink.py)
+          if [ "${{ inputs.bump }}" = "none" ]; then
+            # Same version, new binaries. Nobody is told: the app compares
+            # version numbers, so a build that keeps its number is a build its
+            # users never hear about.
+            echo "tag=v$old" >> "$GITHUB_OUTPUT"
+            echo "moved=no" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           new=$(echo "$old" | awk -F. '{print $1 "." $2 "." $3 + 1}')
           sed -i "s/^VERSION = \"$old\"/VERSION = \"$new\"/" untitledlink.py
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git commit -am "rebuild for a fresh yt-dlp: $old -> $new"
-          git tag "v$new"
-          git push origin HEAD --tags
+          git push origin HEAD
+          echo "tag=v$new" >> "$GITHUB_OUTPUT"
+          echo "moved=yes" >> "$GITHUB_OUTPUT"
+
+      - name: Tag it, which sets the release workflow going
+        run: |
+          git tag "${{ steps.version.outputs.tag }}" --force
+          git push origin "${{ steps.version.outputs.tag }}" --force
+          echo "### ${{ steps.version.outputs.tag }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "version moved: ${{ steps.version.outputs.moved }}" >> "$GITHUB_STEP_SUMMARY"

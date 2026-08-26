@@ -202,6 +202,24 @@ by, and links that turn out to be web pages dropped before they reach the list.
 That costs a request per link, which a small server reads as a scraper, and over
 Tor it costs seconds per request.
 
+## Keeping it working
+
+yt-dlp is the part that rots: sites change their markup, yt-dlp ships a fix
+within days, and a frozen exe cannot pip into itself. Run from source it
+updates itself on the first scan of each session; the exe cannot, so fresh
+builds come from CI instead.
+
+**Automatically, on the first of each month.** The patch number moves, a tag
+goes up, and both binaries are rebuilt with whatever yt-dlp is current that
+day. The app tells you a newer version exists the next time you scan
+something.
+
+**By hand, when something breaks on the 5th.** Actions → *fresh build* → *Run
+workflow*, type `go` in the confirm field. The `bump` field decides whether the
+version moves: `patch` publishes 0.1.2 as 0.1.3 and everyone is told, `none`
+replaces the binaries of the current version quietly - which also means nobody
+hears about it, since the app compares version numbers.
+
 ## Rate limits
 
 Parallelism aimed at one host is what trips rate limiters, so at most **2

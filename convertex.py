@@ -527,10 +527,10 @@ class Item:
     """
 
     __slots__ = ("url", "name", "kind", "quality", "res", "length", "size",
-                 "via", "fmt", "thumb", "info", "details")
+                 "via", "fmt", "thumb", "info", "details", "page")
 
     def __init__(self, url, name, kind, size=0, via="file", fmt=None, thumb=None,
-                 info="", details="", quality="", length="", res=""):
+                 info="", details="", quality="", length="", res="", page=""):
         self.url, self.name, self.kind = url, name, kind
         self.quality = quality  # "1080p mp4", "mp3 320k" - display only
         self.res = res          # "1080x1920"; a column, not a word inside info
@@ -540,6 +540,10 @@ class Item:
         self.thumb = thumb      # url to show in the preview pane
         self.info = info        # one-line technical summary for the list
         self.details = details  # multi-line block for the preview pane
+        # The page this was found on, sent back as the Referer. Plenty of hosts
+        # hand over a file only to a request that says which page asked for it,
+        # and refuse everything else with a 403 that looks like a dead link.
+        self.page = page
 
 
 def checkbox_images(size: int = CHECKBOX) -> dict:
@@ -781,6 +785,47 @@ def kind_of(url: str) -> str | None:
     return EXT_KIND.get(ext)
 
 
+# What a link that hands over a file tends to say when it has no extension to
+# say it with: eClass and Moodle serve everything through document/index.php
+# and mod/resource/view.php, Drive through export=download, plenty of sites
+# through a download.php with the real name in a header.
+DOWNLOAD_HINTS = ("download", "attachment", "getfile", "get_file", "/dl/",
+                  "export=download", "mod/resource", "document/index.php",
+                  "file.php", "fileid=", "file_id=", "docid=", "attach")
+
+
+def better_name(current: str, offered: str) -> str:
+    """Prefer the name the server offered, when the one we have is a page.
+
+    "index.php" is what a link with the name in its headers looks like from
+    the outside, and it is no better as a filename on disk than it is as a row
+    in the list.
+    """
+    if not offered:
+        return current
+    ours = os.path.splitext(current)[1].lower()
+    return offered if ours in ("", ".php", ".asp", ".aspx", ".jsp", ".cgi",
+                               ".html", ".htm") else current
+
+
+def looks_like_download(url: str) -> bool:
+    """A link with no known extension that still smells like a file.
+
+    Collecting only known extensions meant a page of lecture handouts came
+    back empty rather than wrong - nothing to be clicked, no reason given.
+    These are listed as files and the content type settles it: the full scan
+    drops the ones that answer with a page, and the discreet scan says so when
+    the row is opened.
+    """
+    if kind_of(url):
+        return False
+    parts = urlparse(url)
+    if not parts.path or parts.path.endswith("/"):
+        return False
+    hay = (parts.path + "?" + parts.query).lower()
+    return any(h in hay for h in DOWNLOAD_HINTS)
+
+
 def jpeg_size(data: bytes) -> tuple[int, int] | None:
     """Width and height straight out of a JPEG's SOF marker.
 
@@ -839,19 +884,46 @@ def image_dimensions(s: requests.Session, url: str) -> str:
         return ""
 
 
-def head(s: requests.Session, url: str) -> tuple[int, str]:
-    """(content-length, content-type). (0, "") when the URL is not reachable."""
+def offered_name(headers) -> str:
+    """The filename a server offers in Content-Disposition, or "".
+
+    A link like document/index.php?download=/1 has no name worth having in it;
+    the name lives in the header instead, and without reading it both the row
+    and the saved file end up called index.php.
+    """
+    disp = headers.get("content-disposition", "")
+    if "filename" not in disp.lower():
+        return ""
+    # filename*=UTF-8''name.pdf wins over filename="name.pdf" when both are
+    # there, which is the whole point of the starred one.
+    for pattern in (r"filename\*\s*=\s*[^']*'[^']*'([^;]+)",
+                    r'filename\s*=\s*"([^"]+)"',
+                    r"filename\s*=\s*([^;]+)"):
+        found = re.search(pattern, disp, re.I)
+        if found:
+            return safe_name(unquote(found.group(1).strip().strip('"')))
+    return ""
+
+
+def head(s: requests.Session, url: str,
+         referer: str = "") -> tuple[int, str, str]:
+    """(content-length, content-type, offered filename).
+
+    (0, "", "") when the URL is not reachable."""
     import requests
+    sent = {"Referer": referer} if referer else {}
     try:
-        r = s.head(url, timeout=12, allow_redirects=True)
+        r = s.head(url, timeout=12, allow_redirects=True, headers=sent)
         if r.status_code >= 400:  # plenty of CDNs refuse HEAD
-            r = s.get(url, timeout=12, stream=True)
+            r = s.get(url, timeout=12, stream=True, headers=sent)
             r.close()
         if r.status_code >= 400:
-            return 0, ""
-        return int(r.headers.get("content-length") or 0), r.headers.get("content-type", "")
+            return 0, "", ""
+        return (int(r.headers.get("content-length") or 0),
+                r.headers.get("content-type", ""),
+                offered_name(r.headers))
     except (requests.RequestException, ValueError):
-        return 0, ""
+        return 0, "", ""
 
 
 def probe_all(items: list[Item], s: requests.Session,
@@ -862,12 +934,13 @@ def probe_all(items: list[Item], s: requests.Session,
     from concurrent.futures import ThreadPoolExecutor
 
     def probe(it: Item):
-        it.size, ctype = head(s, it.url)
+        it.size, ctype, offered = head(s, it.url, it.page)
         if "html" in ctype:
             return None
+        it.name = better_name(it.name, offered)
         if it.kind == "image":
             for cand in upgrade_image(it.url):
-                size, ctype = head(s, cand)
+                size, ctype, _ = head(s, cand, it.page)
                 if size > it.size and "html" not in ctype:
                     it.url, it.size = cand, size
         return it
@@ -958,7 +1031,7 @@ def scrape_page(url: str, proxy: str | None, log, embeds: bool = True,
         if not raw or raw.startswith(("data:", "javascript:", "#")):
             return
         full = urljoin(url, raw.strip()).split("#")[0]
-        kind = kind_of(full)
+        kind = kind_of(full) or ("file" if looks_like_download(full) else None)
         if kind:
             found.setdefault(full, kind)
 
@@ -971,7 +1044,8 @@ def scrape_page(url: str, proxy: str | None, log, embeds: bool = True,
         if meta.get("property") in ("og:image", "og:video") or meta.get("name") == "twitter:image":
             add(meta.get("content"))
 
-    items = [Item(u, name_from_url(u), k, thumb=u if k == "image" else None)
+    items = [Item(u, name_from_url(u), k, thumb=u if k == "image" else None,
+                  page=url)
              for u, k in found.items()]
     if quiet:
         # Nothing is probed, so nothing can be dropped either: a link that ends
@@ -1542,8 +1616,11 @@ def download_file(it: Item, outdir: str, proxy: str | None, clean: bool,
     # Stable .part name so a retry picks up where the last attempt stopped;
     # the unique suffix is only decided once the file is whole.
     part = part_path(outdir, it.name, it.url)
+    saved_as = it.name
     have = os.path.getsize(part) if os.path.exists(part) else 0
     headers = {"Range": f"bytes={have}-"} if have else {}
+    if it.page:
+        headers["Referer"] = it.page
 
     with s.get(it.url, stream=True, timeout=40, headers=headers) as r:
         if r.status_code in (429, 503):
@@ -1556,6 +1633,12 @@ def download_file(it: Item, outdir: str, proxy: str | None, clean: bool,
             mode, total = "ab", have
         else:
             r.raise_for_status()
+            # Saving a pdf as index.php because that is what the link looked
+            # like is the same mistake twice: the header knows better. Kept
+            # local rather than written back onto the row - the .part is keyed
+            # by the name this attempt started with, and a retry has to find
+            # the same one.
+            saved_as = better_name(it.name, offered_name(r.headers))
             if "html" in r.headers.get("content-type", ""):
                 # Nothing the scraper collects is served as html: every
                 # extension it knows is a real file. So this is a login wall,
@@ -1583,7 +1666,7 @@ def download_file(it: Item, outdir: str, proxy: str | None, clean: bool,
                 raise IOError(f"stopped short :: {done} of {promised} bytes")
 
     with NAME_LOCK:
-        dest = unique_path(os.path.join(outdir, it.name))
+        dest = unique_path(os.path.join(outdir, saved_as))
         os.replace(part, dest)
     if clean:
         strip_metadata(dest)
@@ -2479,13 +2562,13 @@ class App:
         self.sized.add(index)
         threading.Thread(
             target=self._size_worker,
-            args=(index, it.url, self.scan_token,
+            args=(index, it.url, it.page, self.scan_token,
                   self.proxy()),
             daemon=True).start()
 
-    def _size_worker(self, index, url, token, proxy):
-        size, ctype = head(session_for(proxy), url)
-        self.q.put(("size", (index, size, token), ctype))
+    def _size_worker(self, index, url, referer, token, proxy):
+        size, ctype, offered = head(session_for(proxy), url, referer)
+        self.q.put(("size", (index, size, token, offered), ctype))
 
     def _thumb_worker(self, url, real_url, token, proxy):
         try:
@@ -3170,7 +3253,7 @@ class App:
                     if self.route_label and self.route_label.winfo_exists():
                         self.route_label.config(text=a)
                 elif kind == "size":
-                    index, size, token = a
+                    index, size, token, offered = a
                     rows = self.tree.get_children()
                     if token == self.scan_token and index < len(rows):
                         if "html" in (b or ""):
@@ -3180,9 +3263,16 @@ class App:
                             self.log(f"serves a page, not a file :: "
                                      f"{self.items[index].url}", "warn")
                             size = 0
-                        self.items[index].size = size
+                        it = self.items[index]
+                        it.size = size
+                        named = better_name(it.name, offered)
+                        if named != it.name:
+                            # A row called index.php is the server keeping the
+                            # name in a header; opening it is when we find out.
+                            it.name = named
+                            self.tree.set(rows[index], "name", named)
                         self.tree.set(rows[index], "size",
-                                      size_cell(self.items[index], True))
+                                      size_cell(it, True))
                         # the panel was drawn before the size landed
                         if self.tree.selection() == (rows[index],):
                             self.show_preview()
@@ -3276,7 +3366,7 @@ def selftest():
         def get(self, url, **kw):
             raw = type("Raw", (), {"read": lambda _s, n, decode_content=True: page})()
             return type("R", (), {"headers": {"content-type": "text/html"},
-                                  "raw": raw,
+                                  "raw": raw, "status_code": 200,
                                   "raise_for_status": lambda _s: None})()
 
         def head(self, url, **kw):
@@ -3456,6 +3546,27 @@ def selftest():
     finally:
         TOR_MODE = False
     assert "Chrome" in user_agent(), "the switch did not switch back"
+
+    # the name a server offers in a header beats the one in a php link
+    assert offered_name({"content-disposition": 'attachment; filename="notes.pdf"'}) == "notes.pdf"
+    assert offered_name({"content-disposition": "attachment; filename=notes.pdf"}) == "notes.pdf"
+    assert offered_name({"content-disposition": "attachment; filename*=UTF-8''%CE%B1.pdf"}) == "α.pdf"
+    assert offered_name({"content-disposition": "inline"}) == ""
+    assert offered_name({}) == ""
+    assert better_name("index.php", "notes.pdf") == "notes.pdf"
+    assert better_name("view", "notes.pdf") == "notes.pdf", "no extension at all"
+    assert better_name("clip.mp4", "tracking.mp4") == "clip.mp4",         "a real filename is not overruled by a header"
+    assert better_name("index.php", "") == "index.php", "nothing offered"
+
+    # a link with no extension can still be a file: eClass and Moodle serve
+    # everything through a php page, and collecting by extension alone meant a
+    # page of handouts came back empty rather than wrong
+    assert looks_like_download("https://eclass.uoa.gr/modules/document/index.php?course=X&download=/1.pdf")
+    assert looks_like_download("https://x.com/mod/resource/view.php?id=99")
+    assert looks_like_download("https://drive.google.com/uc?export=download&id=9")
+    assert not looks_like_download("https://x.com/clip.mp4"), "that has an extension"
+    assert not looks_like_download("https://x.com/about"), "an ordinary page"
+    assert not looks_like_download("https://x.com/downloads/"), "a directory"
 
     # subtitles: nothing at all unless asked for, and then the window's
     # language before English

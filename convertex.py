@@ -83,7 +83,7 @@ FILE_EXT = {
     "audio": ".mp3 .m4a .m4b .aac .opus .ogg .oga .wav .flac .wma .aiff .aif "
              ".mka",
     "doc": ".pdf .epub .mobi .azw3 .doc .docx .xls .xlsx .ppt .pptx .odt .ods "
-            ".odp .rtf .txt .md .csv",
+            ".odp .rtf .txt .md .csv .srt .vtt .ass .ssa",
     "archive": ".zip .rar .7z .tar .gz .tgz .bz2 .xz .zst .iso .cab .dmg",
 }
 EXT_KIND = {e: k for k, exts in FILE_EXT.items() for e in exts.split()}
@@ -1039,29 +1039,53 @@ def scrape_page(url: str, proxy: str | None, log, embeds: bool = True,
     # Bounded read: BeautifulSoup sniffs the encoding out of the bytes itself,
     # and r.text would happily pull a runaway response into memory first.
     from bs4 import BeautifulSoup
-    soup = BeautifulSoup(r.raw.read(MAX_HTML_BYTES, decode_content=True),
-                         "html.parser")
+    body = r.raw.read(MAX_HTML_BYTES, decode_content=True)
+    soup = BeautifulSoup(body, "html.parser")
     found: dict[str, str] = {}
+    offered: dict[str, str] = {}     # url -> the name the page suggested
 
-    def add(raw):
+    def add(raw, forced: str = "", name: str = ""):
         if not raw or raw.startswith(("data:", "javascript:", "#")):
             return
         full = urljoin(url, raw.strip()).split("#")[0]
-        kind = kind_of(full) or ("file" if looks_like_download(full) else None)
+        kind = (forced or kind_of(full)
+                or ("file" if looks_like_download(full) else ""))
         if kind:
             found.setdefault(full, kind)
+            if name:
+                offered.setdefault(full, safe_name(name))
 
-    for tag in soup.find_all(["a", "img", "source", "video", "audio", "embed"]):
-        for attr in ("href", "src", "data-src", "data-original", "data-full", "poster"):
-            add(tag.get(attr))
+    for tag in soup.find_all(["a", "img", "source", "video", "audio", "embed",
+                              "object", "track"]):
+        # download="Lecture 3.pdf" is the page saying outright that this is a
+        # file and what it is called - the one marker that needs no guessing,
+        # and it was being ignored along with the name it carries.
+        marked = tag.name == "a" and tag.has_attr("download")
+        given = tag.get("download") if isinstance(tag.get("download"), str) else ""
+        for attr in ("href", "src", "data", "data-src", "data-original",
+                     "data-full", "data-url", "data-file", "data-href",
+                     "data-download", "data-mp4", "data-video", "poster"):
+            add(tag.get(attr), "file" if marked else "", given)
         if tag.get("srcset"):
             add(best_from_srcset(tag["srcset"], url))
     for meta in soup.find_all("meta"):
         if meta.get("property") in ("og:image", "og:video") or meta.get("name") == "twitter:image":
             add(meta.get("content"))
 
-    items = [Item(u, name_from_url(u), k, thumb=u if k == "image" else None,
-                  page=url)
+    # Whatever the tags did not carry. Players keep their sources in a script
+    # as JSON - "file":"https:\/\/host\/lecture.mp4" - galleries keep theirs
+    # in a style attribute as url(...), and neither is a tag with an attribute
+    # to read. Only addresses that already name a type this app knows are
+    # taken, so the sweep adds files rather than noise.
+    text = body.decode("utf-8", "replace").replace("\/", "/")
+    text = text.replace("&amp;", "&")
+    for match in re.finditer(r"""https?://[^\s"'<>\)]{4,}""", text):
+        add(match.group(0))
+    for match in re.finditer(r"""url\(\s*['"]?([^)'"]+)""", text):
+        add(match.group(1))
+
+    items = [Item(u, offered.get(u) or name_from_url(u), k,
+                  thumb=u if k == "image" else None, page=url)
              for u, k in found.items()]
     if quiet:
         # Nothing is probed, so nothing can be dropped either: a link that ends
@@ -3399,8 +3423,17 @@ def selftest():
 
     # the discreet scan reads the page and touches nothing else; the full one
     # measures every candidate
-    page = (b'<html><body><a href="/a.mp4">a</a><img src="/b.jpg">'
-            b'<a href="/c.mp3">c</a></body></html>')
+    # every hiding place a page has: a tag, a script hiding JSON, a style
+    # attribute, and an anchor that says outright that it is a download
+    page_html = (
+        '<html><body><a href=\"/a.mp4\">a</a><img src=\"/b.jpg\">'
+        '<a href=\"/c.mp3\">c</a>'
+        '<script>var p = {\"file\":\"https://cdn.test/lecture.mp4\",'
+        '\"alt\":\"https:\\/\\/cdn.test\\/escaped.mp4\"};</script>'
+        '<div style=\'background-image:url(/shot.png)\'></div>'
+        '<a href=\"/get.php?id=7\" download=\"Notes.pdf\">notes</a>'
+        '<a href=\"/about\">about</a></body></html>')
+    page = page_html.encode()
     heads = []
 
     class _PageSession:
@@ -3421,11 +3454,17 @@ def selftest():
     try:
         quiet = scrape_page("https://h/p", None, lambda *_a: None,
                             embeds=False, quiet=True)
-        assert len(quiet) == 3, f"discreet scan found {len(quiet)} of 3 links"
+        names = {i.name for i in quiet}
+        assert len(quiet) == 7, f"discreet scan found {len(quiet)}: {names}"
+        assert "lecture.mp4" in names, "a source hidden in a script was missed"
+        assert "escaped.mp4" in names, "escaped slashes in JSON were missed"
+        assert "shot.png" in names, "a css background was missed"
+        assert "Notes.pdf" in names,             "download= names the file, and the page said so"
+        assert not any("about" in n for n in names), "an ordinary page link"
         assert not heads, f"discreet scan probed {heads}"
         assert all(it.size == 0 for it in quiet), "sizes must wait to be asked for"
         full = scrape_page("https://h/p", None, lambda *_a: None, embeds=False)
-        assert len(heads) == 3 and all(it.size == 9 for it in full)
+        assert len(heads) == 7 and all(it.size == 9 for it in full)
     finally:
         globals()["session_for"] = keep_session_for
 

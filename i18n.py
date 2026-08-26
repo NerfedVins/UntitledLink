@@ -115,6 +115,8 @@ STRINGS = {
         # anyone read about.
         "scanning": "converting the link...",
         "scanning_n": "converting link {n} of {total}...",
+        "filter": "filter",
+        "filter_count": "{n} of {total}",
         "found": "{n} found :: tick the boxes, then download",
         "nothing_found": "nothing downloadable found here",
         "scan_failed": "scan failed :: {err}",
@@ -239,6 +241,8 @@ STRINGS = {
         "paste_first": "βάλε πρώτα ένα λινκ",
         "scanning": "μετατροπή συνδέσμου...",
         "scanning_n": "μετατροπή συνδέσμου {n} από {total}...",
+        "filter": "φίλτρο",
+        "filter_count": "{n} από {total}",
         "found": "{n} βρέθηκαν :: τσέκαρε τα κουτάκια, μετά λήψη",
         "nothing_found": "δεν βρέθηκε τίποτα για κατέβασμα εδώ",
         "scan_failed": "η σάρωση απέτυχε :: {err}",

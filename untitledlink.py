@@ -2039,6 +2039,8 @@ class App:
         self.t = Tr(self.prefs.get("language", "en"))
         self.marked: set[str] = set()
         self.cancelled: set[int] = set()   # item indices pulled mid-download
+        self.rows: list[str] = []          # tree row ids, in item order
+        self.failed: list[int] = []        # item indices the last batch lost
         self.sized: set[int] = set()       # rows already measured on demand
         self.scanning = False
         # Bumped to abandon a scan. The worker cannot be killed - it is parked
@@ -2514,6 +2516,22 @@ class App:
         # the widest part of a maximised window.
         self.source_line = tk.Label(left, bg=C["bg"], fg=C["fg"], font=self.fb,
                                     anchor="w")
+        # A lecture page comes back with two hundred rows and no way to find
+        # the four pdfs among them. Typing here hides what does not match - it
+        # hides rather than forgets, so a row ticked before you started typing
+        # is still ticked and still downloads.
+        strip = tk.Frame(left, bg=C["bg"])
+        strip.pack(fill="x", pady=(0, 6))
+        tk.Label(strip, text=self.t("filter"), bg=C["bg"], fg=C["dim"],
+                 font=self.f).pack(side="left", padx=(0, 8))
+        self.filter_var = tk.StringVar()
+        self.filter_var.trace_add("write", lambda *_: self.apply_filter())
+        self.filter_box = self.entry(strip, width=24, textvariable=self.filter_var)
+        self.filter_box.pack(side="left", fill="x", expand=True, ipady=2)
+        self.filter_count = tk.Label(strip, text="", bg=C["bg"], fg=C["dim"],
+                                     font=self.f)
+        self.filter_count.pack(side="left", padx=(8, 0))
+
         self.table = tk.Frame(left, bg=C["bg"])
         self.table.pack(fill="both", expand=True)
         # The checkbox lives in the tree column (#0) because that is the only
@@ -2666,8 +2684,8 @@ class App:
     def pull_from_queue(self, row):
         """Click a row mid-download to drop it. The in-flight one aborts at its
         next chunk, which is the way out when a server stops responding."""
-        index = self.tree.index(row)
-        if index in self.cancelled:
+        index = self.index_of(row)
+        if index < 0 or index in self.cancelled:
             return
         self.cancelled.add(index)
         self.tree.item(row, image=self.boxes["cut"])
@@ -2702,8 +2720,10 @@ class App:
         self.url_var.set("")
         self.tree.delete(*self.tree.get_children())
         self.items = []
+        self.rows = []
         self.marked.clear()
         self.sized.clear()
+        self.filter_var.set("")
         self.show_source_line([])
         self.clear_thumb(self.t("preview_hint"))
         self.meta_box.config(text="")
@@ -2716,6 +2736,42 @@ class App:
             return
         self.log("refresh", "info")
         self.do_scan()
+
+    def index_of(self, row) -> int:
+        """Which item a row belongs to.
+
+        Not its position in the tree: a filtered row is detached, so position
+        stops meaning anything the moment anyone types. This is the mapping
+        that survives that, and every lookup goes through it.
+        """
+        try:
+            return self.rows.index(row)
+        except ValueError:
+            return -1
+
+    def apply_filter(self, *_a):
+        """Show the rows that match what is typed, and keep the rest.
+
+        detach() rather than delete(): a detached row keeps its identity, so
+        the marks - which are held by row id - survive being hidden. A filter
+        is a way of looking, not a way of losing your ticks.
+        """
+        want = self.filter_var.get().strip().lower()
+        shown = 0
+        for index, row in enumerate(self.rows):
+            it = self.items[index] if index < len(self.items) else None
+            hay = " ".join(str(b).lower() for b in
+                           (it.name, it.kind, it.info, it.quality, it.url)
+                           if b) if it else ""
+            if not want or want in hay:
+                self.tree.move(row, "", shown)
+                shown += 1
+            else:
+                self.tree.detach(row)
+        self.filter_count.config(
+            text="" if not want
+            else self.t("filter_count", n=shown, total=len(self.rows)))
+        return shown
 
     def toggle_mark(self, row, force=None):
         on = (row not in self.marked) if force is None else force
@@ -2737,7 +2793,8 @@ class App:
         if not n:
             self.say(self.t("nothing_marked"))
             return
-        total = sum(self.items[self.tree.index(r)].size for r in self.marked)
+        total = sum(self.items[i].size for i in
+                    (self.index_of(r) for r in self.marked) if i >= 0)
         self.say(self.t("marked", n=n, size=human(total)), C["green"])
 
     # Quality is mostly technical strings - "1080p mp4", "mp3 320k" - which are
@@ -2780,7 +2837,9 @@ class App:
         rows = self.tree.selection()
         if not rows:
             return
-        index = self.tree.index(rows[0])
+        index = self.index_of(rows[0])
+        if index < 0:
+            return
         it = self.items[index]
         self.measure(index, it)
         self.preview_token += 1
@@ -3200,7 +3259,7 @@ class App:
 
     def rebuild(self):
         """Redraw the whole window in the new language, keeping the results."""
-        items, marked = self.items, {self.tree.index(r) for r in self.marked}
+        items, marked = self.items, {self.index_of(r) for r in self.marked}
         for child in self.root.winfo_children():
             child.destroy()
         self.marked.clear()
@@ -3267,8 +3326,12 @@ class App:
         self.scan_token += 1
         self.tree.delete(*self.tree.get_children())
         self.items = []
+        self.rows = []
         self.marked.clear()
         self.sized.clear()
+        # A filter left over from the last scan would hide the new results and
+        # look like a scan that found nothing.
+        self.filter_var.set("")
         self.stop_btn.pack(side="left", padx=(6, 0))
         threading.Thread(target=self._scan_worker, args=(links, self.scan_token),
                          daemon=True).start()
@@ -3349,7 +3412,8 @@ class App:
             return
         rows = ([r for r in self.tree.get_children() if r in self.marked]
                 or self.tree.get_children())
-        picks = [(self.tree.index(r), self.items[self.tree.index(r)]) for r in rows]
+        picks = [(i, self.items[i]) for i in
+                 (self.index_of(r) for r in rows) if i >= 0]
         self.cancelled.clear()
         if not picks:
             self.say(self.t("nothing_to_dl"), C["amber"])
@@ -3383,6 +3447,9 @@ class App:
         frac: dict[int, float] = {i: 0.0 for i, _ in picks}   # index -> 0..1
         speed: dict[int, float | None] = {i: None for i, _ in picks}  # None = not running
         tally = {"ok": 0, "fail": 0, "dropped": 0}
+        # Which ones, not just how many: forty downloads and three failures is
+        # three rows to find again by eye, in a list that has scrolled away.
+        beaten: list[int] = []
         lock = threading.Lock()
         last_shown = [0.0]
         queued_bytes = sum(i.size for _, i in picks)
@@ -3460,7 +3527,7 @@ class App:
                             drop_part(it, outdir)
                             with lock:
                                 tally["fail"] += 1
-                            self.log(f"FAILED after {tries} tries :: {it.name} "
+                                self.log(f"FAILED after {tries} tries :: {it.name} "
                                      f":: {exc}", "error")
                             if not isinstance(exc, RateLimited):
                                 self.log(traceback.format_exc().rstrip(), "error")
@@ -3489,6 +3556,7 @@ class App:
         self.log(f"done :: {ok} saved, {fail} failed, {dropped} cancelled",
                  "error" if fail else "ok")
         self.q.put(("hide_stop", None, None))
+        self.q.put(("failed", sorted(beaten), None))
         self.q.put(("busy", False, None))
 
     def set_busy(self, busy):
@@ -3567,18 +3635,21 @@ class App:
                         here = set(os.listdir(outdir)) if outdir else set()
                     except OSError:
                         here = set()
+                    self.rows = []
                     for it in a:
                         # kind doubles as the resolution label ("2160p"), so fall
                         # back to the generic media tag for colouring those rows
                         tag = it.kind if it.kind in TAG_COLOURS else "file"
-                        self.tree.insert("", "end", tags=(tag,),
+                        self.rows.append(self.tree.insert(
+                                         "", "end", tags=(tag,),
                                          image=self.boxes["off"],
                                          values=(self.t("kind_" + it.kind),
                                                  self.quality_text(it.quality),
                                                  it.res, it.length,
                                                  size_cell(it, False),
                                                  self.info_cell(it, here),
-                                                 it.name))
+                                                 it.name)))
+                    self.apply_filter()
                     self.show_source_line(a)
         except queue.Empty:
             pass
@@ -4308,6 +4379,11 @@ def ui_selftest():
         return
     try:
         root.withdraw()
+        callback_errors = []
+        root.report_callback_exception = lambda kind, value, tb: (
+            callback_errors.append("".join(
+                traceback.format_exception(kind, value, tb))))
+
         app = App(root)
         # Tk shows its window the moment it is created, so a small white square
         # sat on screen through the whole build and then jumped to full size.
@@ -4720,6 +4796,9 @@ def ui_selftest():
             assert app.quality_text("as set") != "as set" or code == "en"
         app.t.set("en")
 
+        # earlier blocks put rows in by hand; a scan always starts from an
+        # empty tree, and so does this
+        app.tree.delete(*app.tree.get_children())
         app.q.put(("items", [Item("https://h/a.jpg", "a.jpg", "image", 100),
                              Item("https://h/b.mp4", "b.mp4", "video", 200)], None))
         app.pump()
@@ -4731,6 +4810,18 @@ def ui_selftest():
         assert all(b.width() == CHECKBOX for b in app.boxes.values())
         off = app.tree.item(rows[0], "image")
         assert off, "row inserted without a checkbox"
+
+        # the filter hides rows without losing them, or what is ticked in them
+        app.toggle_mark(rows[0], force=True)
+        app.filter_var.set("mp4")
+        assert len(app.tree.get_children()) == 1, "the jpg should be hidden"
+        assert rows[0] in app.marked, "hiding a row untinted its tick"
+        assert app.index_of(rows[1]) == 1,             "a row must know its item by identity, not by where it sits"
+        assert app.filter_count.cget("text") == app.t("filter_count", n=1, total=2)
+        app.filter_var.set("")
+        assert len(app.tree.get_children()) == 2, "clearing the box brings them back"
+        assert list(app.tree.get_children()) == list(rows), "and in the same order"
+        app.toggle_mark(rows[0], force=False)
         app.toggle_mark(rows[0])
         assert app.tree.item(rows[0], "image") != off, "ticking changed nothing"
         app.toggle_mark(rows[0])
@@ -4794,6 +4885,12 @@ def ui_selftest():
                                    "import time; time.sleep(30)"])
         with _CHILDREN_LOCK:
             _CHILDREN.add(parked)
+
+        # Tk swallows exceptions raised inside its callbacks: they print and the
+        # program carries on, so a broken row lookup passed a whole suite while
+        # printing tracebacks nobody read. Anything that reached the handler
+        # during this run fails it now.
+        assert not callback_errors, callback_errors[0]
 
         app.close()   # remember() must not raise on the way out
         assert parked.wait(timeout=10) is not None, "close() left a child running"

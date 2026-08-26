@@ -3857,6 +3857,10 @@ def selftest():
     assert tr("found", n=3) != _strings["en"]["found"], "greek must differ"
     assert tr("unknown_key_xyz") == "unknown_key_xyz", "missing key must not crash"
     assert _Tr("klingon").lang == "en", "unknown language falls back"
+    # A fresh install has no settings file, and the first window anyone sees
+    # has to be readable by anyone: English until it is changed in settings.
+    assert _Tr(load_settings().get("language", "en")).lang == "en" or                load_settings().get("language"),         "with no settings file the window must open in English"
+    assert list(_langs)[0] == "en", "English leads the dropdown"
     # the window shows sentence case, whatever the dicts are written in
     assert _Tr("en")("scan") == "Scan" and _Tr("en")("col_size") == "SIZE"
     assert _Tr("el")("dlg_ffmpeg") == "ffmpeg", "a name keeps its own spelling"

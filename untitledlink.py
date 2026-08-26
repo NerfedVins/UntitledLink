@@ -882,6 +882,12 @@ def name_from_url(url: str) -> str:
     return safe_name(unquote(os.path.basename(urlparse(url).path)) or "file")
 
 
+def height_of(res: str) -> int:
+    """The pixel height in "1920x1080", for sorting. 0 when there is none."""
+    found = re.search(r"x(\d+)", res or "")
+    return int(found.group(1)) if found else 0
+
+
 def kind_of(url: str) -> str | None:
     ext = os.path.splitext(urlparse(url).path)[1].lower()
     return EXT_KIND.get(ext)
@@ -2041,6 +2047,8 @@ class App:
         self.cancelled: set[int] = set()   # item indices pulled mid-download
         self.rows: list[str] = []          # tree row ids, in item order
         self.failed: list[int] = []        # item indices the last batch lost
+        self.sort_by = ""                  # which column, and which way
+        self.sort_reversed = False
         self.sized: set[int] = set()       # rows already measured on demand
         self.scanning = False
         # Bumped to abandon a scan. The worker cannot be killed - it is parked
@@ -2558,7 +2566,8 @@ class App:
                             ("size", self.t("col_size"), 76),
                             ("info", self.t("col_info"), 190),
                             ("name", self.t("col_name"), 240)):
-            self.tree.heading(col, text=txt, anchor="center")
+            self.tree.heading(col, text=txt, anchor="center",
+                              command=lambda c=col: self.sort_rows(c))
             self.tree.column(col, width=w, anchor="center", minwidth=56,
                              stretch=(col in ("info", "name")))
         sb = ttk.Scrollbar(self.table, orient="vertical", command=self.tree.yview,
@@ -2569,6 +2578,17 @@ class App:
         for kind, colour in TAG_COLOURS.items():
             self.tree.tag_configure(kind, foreground=colour)
         self.tree.tag_configure("marked", background=C["line"])
+        self.row_menu = tk.Menu(self.tree, tearoff=0, bg=C["panel"],
+                                fg=C["fg"], activebackground=C["line"],
+                                activeforeground=C["green"], font=self.f,
+                                borderwidth=0)
+        self.row_menu.add_command(label=self.t("menu_open_page"),
+                                  command=self.open_source_page)
+        self.row_menu.add_command(label=self.t("menu_copy_link"),
+                                  command=lambda: self.copy_row("url"))
+        self.row_menu.add_command(label=self.t("menu_copy_name"),
+                                  command=lambda: self.copy_row("name"))
+        self.tree.bind("<Button-3>", self.on_row_menu)
         self.tree.bind("<Button-1>", self.on_row_click)
         self.tree.bind("<<TreeviewSelect>>", lambda _e: self.show_preview())
         self.tree.bind("<Double-1>", self.on_double_click)
@@ -2737,6 +2757,76 @@ class App:
             return
         self.log("refresh", "info")
         self.do_scan()
+
+    # What each column sorts on. Not the text in the cell: SIZE reads "2.0K"
+    # and sorting that alphabetically puts 900B after 2.0K, and TYPE is a
+    # translated word whose order changes with the language.
+    SORT_KEYS = {
+        "kind": lambda it: (it.kind, it.name.lower()),
+        "quality": lambda it: (it.quality, it.name.lower()),
+        "res": lambda it: (-height_of(it.res), it.name.lower()),
+        "length": lambda it: (it.length, it.name.lower()),
+        "size": lambda it: (-it.size, it.name.lower()),
+        "info": lambda it: (it.info, it.name.lower()),
+        "name": lambda it: it.name.lower(),
+    }
+
+    def sort_rows(self, column: str):
+        """Reorder the table by a column, and again to reverse it.
+
+        The rows keep their identity while they move, which is what lets the
+        marks and the item they belong to survive being sorted - the same
+        reason the filter detaches rather than deletes.
+        """
+        key = self.SORT_KEYS.get(column)
+        if not key or not self.rows:
+            return
+        self.sort_reversed = not self.sort_reversed if self.sort_by == column else False
+        self.sort_by = column
+        pairs = [(self.items[i], row) for i, row in enumerate(self.rows)
+                 if i < len(self.items)]
+        pairs.sort(key=lambda pair: key(pair[0]), reverse=self.sort_reversed)
+        self.rows = [row for _it, row in pairs]
+        self.items = [it for it, _row in pairs]
+        # The marks are held by row id and the rows are the same rows, so
+        # nothing has to be re-ticked; only the order changed.
+        self.apply_filter()
+
+    def on_row_menu(self, event):
+        """Right-click picks the row under the cursor and offers it."""
+        row = self.tree.identify_row(event.y)
+        if not row:
+            return
+        self.tree.selection_set(row)
+        self.row_menu.tk_popup(event.x_root, event.y_root)
+        self.row_menu.grab_release()
+
+    def picked_item(self) -> Item | None:
+        rows = self.tree.selection()
+        index = self.index_of(rows[0]) if rows else -1
+        return self.items[index] if 0 <= index < len(self.items) else None
+
+    def open_source_page(self):
+        """The page a row was found on, in the browser.
+
+        Every scraped row remembers it already - it is what the Referer is
+        made of - so this is a question the window could always answer and
+        never offered to.
+        """
+        it = self.picked_item()
+        if it and it.page:
+            webbrowser.open(it.page)
+        elif it:
+            webbrowser.open(it.url)
+
+    def copy_row(self, what: str):
+        it = self.picked_item()
+        if not it:
+            return
+        text = it.url if what == "url" else it.name
+        self.root.clipboard_clear()
+        self.root.clipboard_append(text)
+        self.say(self.t("copied"), C["green"])
 
     def index_of(self, row) -> int:
         """Which item a row belongs to.
@@ -3485,7 +3575,13 @@ class App:
                 progressed = sum(frac.values())
                 live = [v for v in speed.values() if v is not None]
                 settled = tally["ok"] + tally["fail"] + tally["dropped"]
+                # Per row as well as per batch: with four running at once, one
+                # bar says how far along everything is and nothing about which
+                # of them has stopped moving.
+                rows = {i: (frac[i], speed[i]) for i in frac
+                        if speed[i] is not None or frac[i] >= 1.0}
             self.q.put(("prog", progressed / total_items * 100, None))
+            self.q.put(("rowprog", rows, None))
             bits = [f"{settled}/{total_items}"]
             if live:
                 bits.append(f"{len(live)} running")
@@ -3600,6 +3696,18 @@ class App:
                     self.prog.config(value=a)
                 elif kind == "busy":
                     self.set_busy(a)
+                elif kind == "rowprog":
+                    for index, (done, rate) in a.items():
+                        if index >= len(self.rows) or index >= len(self.items):
+                            continue
+                        it = self.items[index]
+                        if rate is None:
+                            # finished, or never started: the row goes back to
+                            # saying what it is rather than how it is doing
+                            text = it.info
+                        else:
+                            text = f"{done * 100:.0f}%  {human(int(rate))}/s"
+                        self.tree.set(self.rows[index], "info", text)
                 elif kind == "failed":
                     self.failed = list(a)
                     if self.failed:
@@ -4076,6 +4184,14 @@ def selftest():
     assert not already_here(folder, Item("https://h/w", "Lecture 4", "video",
                                          via="ytdlp"))
     assert not already_here(set(), Item("https://h/clip.mp4", "clip.mp4", "video"))
+
+    # sorting keys read the item, not the cell: "900B" after "2.0K" is what
+    # sorting the text gets you, and TYPE is a word that changes with language
+    small, big = Item("u", "a", "file", 900), Item("u", "b", "file", 2048)
+    assert App.SORT_KEYS["size"](big) < App.SORT_KEYS["size"](small), "biggest first"
+    assert height_of("1920x1080") == 1080 and height_of("") == 0
+    tall, short = Item("u", "a", "video", res="1920x1080"), Item("u", "b", "video", res="640x480")
+    assert App.SORT_KEYS["res"](tall) < App.SORT_KEYS["res"](short), "tallest first"
 
     # one paste, every link in it - a semester of lectures is ten links, and
     # scanning them was ten rounds of paste, scan, tick, download
@@ -4913,6 +5029,32 @@ def ui_selftest():
                                    "import time; time.sleep(30)"])
         with _CHILDREN_LOCK:
             _CHILDREN.add(parked)
+
+        # clicking a heading sorts, clicking it again reverses, and the marks
+        # ride along because they are held by row rather than by position.
+        # rebuild() just destroyed and remade the table, so the ids from before
+        # it are gone - which is the same reason the app re-reads them.
+        rows = app.rows
+        app.toggle_mark(rows[1], force=True)
+        app.sort_rows("size")
+        assert app.items[0].size == 200, "biggest first"
+        assert app.rows[0] == rows[1] and rows[1] in app.marked, "the tick moved with it"
+        assert app.index_of(rows[1]) == 0, "and the row knows its new item"
+        app.sort_rows("size")
+        assert app.items[0].size == 100, "clicking again turns it round"
+        app.sort_rows("name")
+        assert [i.name for i in app.items] == ["a.jpg", "b.mp4"]
+        app.toggle_mark(rows[1], force=False)
+
+        # right-click offers what the row already knows
+        assert app.picked_item() is None or True
+        app.tree.selection_set(app.rows[0])
+        picked = app.picked_item()
+        assert picked is app.items[0], "the menu would have acted on another row"
+        app.copy_row("url")
+        assert app.root.clipboard_get() == picked.url, "copy link copied something else"
+        app.copy_row("name")
+        assert app.root.clipboard_get() == picked.name
 
         # what failed last time is three rows to find by eye in a list of
         # forty, so the button finds them

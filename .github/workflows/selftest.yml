@@ -9,8 +9,12 @@ on:
   pull_request:
 
 jobs:
-  windows:
-    runs-on: windows-latest
+  test:
+    strategy:
+      fail-fast: false          # a mac failure must not hide a windows pass
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

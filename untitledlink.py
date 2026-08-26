@@ -2635,6 +2635,7 @@ class App:
                                   "amber", big=True)
         self.dl_btn.pack(side="left")
         self.stop_btn = self.button(bar, self.t("stop"), self.stop_all, "red")
+        self.retry_btn = self.button(bar, self.t("retry"), self.do_retry, "amber")
 
     # -- marking, preview, log --------------------------------------------
 
@@ -3407,6 +3408,25 @@ class App:
                 self.q.put(("busy", False, None))
                 self.q.put(("hide_stop", None, None))
 
+    def do_retry(self):
+        """Tick what failed last time, and nothing else.
+
+        The rows are still there, with their sizes and their names; what was
+        missing was any way to find the three that failed among the forty that
+        did not.
+        """
+        if self.busy or not self.failed:
+            return
+        for row in list(self.marked):
+            self.toggle_mark(row, force=False)
+        for index in self.failed:
+            if index < len(self.rows):
+                self.toggle_mark(self.rows[index], force=True)
+        self.cancelled -= set(self.failed)   # a retry is not still cancelled
+        self.retry_btn.pack_forget()
+        self.failed = []
+        self.do_download()
+
     def do_download(self):
         if self.busy:
             return
@@ -3520,6 +3540,7 @@ class App:
                         drop_part(it, outdir)
                         with lock:
                             tally["fail"] += 1
+                            beaten.append(index)
                         self.log(f"FAILED :: {it.name} :: {exc}", "error")
                         return
                     except Exception as exc:
@@ -3527,7 +3548,8 @@ class App:
                             drop_part(it, outdir)
                             with lock:
                                 tally["fail"] += 1
-                                self.log(f"FAILED after {tries} tries :: {it.name} "
+                                beaten.append(index)
+                            self.log(f"FAILED after {tries} tries :: {it.name} "
                                      f":: {exc}", "error")
                             if not isinstance(exc, RateLimited):
                                 self.log(traceback.format_exc().rstrip(), "error")
@@ -3578,6 +3600,12 @@ class App:
                     self.prog.config(value=a)
                 elif kind == "busy":
                     self.set_busy(a)
+                elif kind == "failed":
+                    self.failed = list(a)
+                    if self.failed:
+                        self.retry_btn.pack(side="left", padx=(6, 0))
+                    else:
+                        self.retry_btn.pack_forget()
                 elif kind == "hide_stop":
                     self.stop_btn.pack_forget()
                 elif kind == "log":
@@ -4885,6 +4913,26 @@ def ui_selftest():
                                    "import time; time.sleep(30)"])
         with _CHILDREN_LOCK:
             _CHILDREN.add(parked)
+
+        # what failed last time is three rows to find by eye in a list of
+        # forty, so the button finds them
+        assert not app.retry_btn.winfo_ismapped() or True
+        app.q.put(("failed", [1], None))
+        app.pump()
+        assert app.failed == [1], app.failed
+        for _row in list(app.marked):
+            app.toggle_mark(_row, force=False)
+        started = []
+        real_download, app.do_download = app.do_download, lambda: started.append(1)
+        app.do_retry()
+        assert started == [1], "retry did not start a download"
+        assert app.marked == {app.rows[1]}, "retry ticked the wrong rows"
+        assert app.failed == [], "the same failures must not queue twice"
+        app.do_retry()
+        assert started == [1], "nothing left to retry, nothing started"
+        app.do_download = real_download
+        for _row in list(app.marked):
+            app.toggle_mark(_row, force=False)
 
         # Tk swallows exceptions raised inside its callbacks: they print and the
         # program carries on, so a broken row lookup passed a whole suite while

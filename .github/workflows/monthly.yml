@@ -1,0 +1,30 @@
+# yt-dlp is what rots. Sites change their markup, yt-dlp ships a fix within
+# days, and an exe cannot pip into itself - so a build left alone slowly stops
+# working on the sites that change most. This bumps the patch version once a
+# month and tags it, which sets the release workflow going with whatever yt-dlp
+# is current that day. The app tells its users a newer version exists.
+name: monthly refresh
+
+on:
+  schedule:
+    - cron: "0 5 1 * *"      # the first of the month, 05:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Bump the patch number and tag it
+        run: |
+          old=$(grep -oP '(?<=^VERSION = ")[0-9.]+' untitledlink.py)
+          new=$(echo "$old" | awk -F. '{print $1 "." $2 "." $3 + 1}')
+          sed -i "s/^VERSION = \"$old\"/VERSION = \"$new\"/" untitledlink.py
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "rebuild for a fresh yt-dlp: $old -> $new"
+          git tag "v$new"
+          git push origin HEAD --tags

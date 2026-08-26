@@ -51,6 +51,10 @@ echo.
 echo Built: dist\UntitledLink.exe
 echo Ship that single file. It needs nothing else installed.
 echo.
+REM A build server has nobody to press a key, and the flags have to live in
+REM one place or the exe that CI ships stops being the exe built here.
+if defined CI exit /b 0
+
 echo Before shipping, smoke-test it on a machine without Python:
 echo   1. scan a YouTube link  - resolutions and sizes must appear
 echo   2. download an mp3 row  - proves the bundled ffmpeg works
@@ -62,5 +66,5 @@ exit /b 0
 :fail
 echo.
 echo BUILD FAILED - see the output above.
-pause
+if not defined CI pause
 exit /b 1

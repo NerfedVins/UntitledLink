@@ -1,0 +1,115 @@
+# Both binaries, built by the machines that can build them, from one tag.
+#
+# The Windows exe goes through build.bat rather than a copy of its flags, so
+# the exe CI ships is the exe the build file makes - a second list of
+# PyInstaller flags here would drift within a month.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: .\build.bat
+        shell: cmd
+      - name: The exe has to pass its own suite before anyone downloads it
+        run: .\dist\UntitledLink.exe --selftest
+        shell: cmd
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: dist/UntitledLink.exe
+
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: python -m pip install -r requirements.txt pyinstaller pyinstaller-hooks-contrib
+      - run: python untitledlink.py --selftest
+
+      # macOS wants an .icns: a folder of sizes, turned into one file by a tool
+      # that exists only here.
+      - name: Icon
+        run: |
+          mkdir icon.iconset
+          for size in 16 32 128 256 512; do
+            sips -z $size $size icon.png --out icon.iconset/icon_${size}x${size}.png
+            sips -z $((size * 2)) $((size * 2)) icon.png --out icon.iconset/icon_${size}x${size}@2x.png
+          done
+          iconutil -c icns icon.iconset -o icon.icns
+
+      # No --onefile: a .app is a folder and macOS expects it that way.
+      - name: Build
+        run: |
+          pyinstaller --noconfirm --windowed --name UntitledLink \
+            --icon icon.icns \
+            --collect-all yt_dlp \
+            --collect-all imageio_ffmpeg \
+            --collect-all certifi \
+            --add-data "icon.png:." \
+            --add-data "icon.ico:." \
+            untitledlink.py
+      - run: ditto -c -k --keepParent dist/UntitledLink.app UntitledLink-macos.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: UntitledLink-macos.zip
+
+  publish:
+    needs: [windows, macos]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: built
+      - name: Notes, with the checksums and the yt-dlp that went in
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          ytdlp=$(grep -oE 'yt-dlp[><=~ ]*[0-9.]*' requirements.txt | head -1)
+          {
+            echo "Paste a link, see what is downloadable, take it clean."
+            echo
+            echo "**Windows** - download \`UntitledLink.exe\` and double-click it."
+            echo "Nothing to install. SmartScreen warns the first time because the exe"
+            echo "is unsigned: **More info -> Run anyway**."
+            echo
+            echo "**macOS** - unzip \`UntitledLink-macos.zip\` and drag the app where you"
+            echo "like. It is unsigned too, so the first launch is **right-click -> Open"
+            echo "-> Open**."
+            echo
+            echo "Both were built by CI from the \`$GITHUB_REF_NAME\` tag, and both"
+            echo "answered \`--selftest\` with exit code 0 before being uploaded."
+            echo
+            echo '### Checksums'
+            echo
+            echo '```'
+            (cd built && sha256sum */* | sed 's|.*/||')
+            echo '```'
+          } > notes.md
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --title "UntitledLink ${GITHUB_REF_NAME#v}" \
+            --notes-file notes.md \
+            built/windows/UntitledLink.exe \
+            built/macos/UntitledLink-macos.zip \
+          || gh release upload "$GITHUB_REF_NAME" \
+            built/windows/UntitledLink.exe \
+            built/macos/UntitledLink-macos.zip --clobber

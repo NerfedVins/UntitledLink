@@ -107,8 +107,13 @@ is a miserable way to discover that.
   `:small` on X). Measured: an 89 KB thumbnail became the 4.4 MB original.
 - **Metadata is stripped** before the file lands: EXIF/XMP/IPTC out of JPEG, text
   chunks out of PNG (both lossless - no re-encoding), container tags out of video
-  via ffmpeg, and the Windows `Zone.Identifier` stream that records the source URL
-  of every download.
+  via ffmpeg, and the address out of the Windows `Zone.Identifier` stream.
+
+  That last one keeps what it should: the stream holds `ZoneId=3`, which is
+  what makes Word and Excel open a downloaded file in Protected View, and
+  `HostUrl`, which writes down exactly where you got it. Deleting the stream
+  outright took the warning away with the address - on a `.docx` that warning
+  is the whole defence. The address goes, the zone stays.
 
 ## ffmpeg
 

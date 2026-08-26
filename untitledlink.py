@@ -511,19 +511,40 @@ def _strip_png(data: bytes) -> bytes | None:
     return bytes(out)
 
 
-def drop_mark_of_the_web(path: str) -> None:
-    """Windows tags every download with a Zone.Identifier stream naming the source URL."""
+def scrub_mark_of_the_web(path: str) -> None:
+    """Keep the warning, drop the address.
+
+    Windows tags a downloaded file with a Zone.Identifier stream, and it holds
+    two different things. ZoneId=3 says "this came from the internet", which is
+    what makes Word and Excel open a file in Protected View. HostUrl and
+    ReferrerUrl write down exactly where you were when you got it.
+
+    Deleting the whole stream took the warning away along with the address -
+    and this app lists .docx, .xlsx and .pptx, which are the files where that
+    warning is the entire defence. So the address goes and the zone stays.
+    """
     if os.name != "nt":
         return
+    stream = path + ":Zone.Identifier"
     try:
-        os.remove(path + ":Zone.Identifier")
+        with open(stream, encoding="utf-8", errors="replace") as fh:
+            lines = fh.read().splitlines()
     except OSError:
-        pass
+        return                # no stream at all: nothing was written down
+    kept = [l for l in lines
+            if not l.strip().lower().startswith(("hosturl", "referrerurl"))]
+    if kept == lines:
+        return
+    try:
+        with open(stream, "w", encoding="utf-8") as fh:
+            fh.write("\n".join(kept) + "\n")
+    except OSError:
+        pass                  # a read-only file keeps its stream, warning and all
 
 
 def strip_metadata(path: str) -> bool:
     """Remove identifying metadata in place. True if the file was rewritten."""
-    drop_mark_of_the_web(path)
+    scrub_mark_of_the_web(path)
     try:
         with open(path, "rb") as fh:
             head = fh.read(16)
@@ -3794,6 +3815,28 @@ def selftest():
     assert better_name("view", "notes.pdf") == "notes.pdf", "no extension at all"
     assert better_name("clip.mp4", "tracking.mp4") == "clip.mp4",         "a real filename is not overruled by a header"
     assert better_name("index.php", "") == "index.php", "nothing offered"
+
+    # the download marker: the address it records goes, the warning it carries
+    # stays - Word and Excel open a marked file in Protected View, and this app
+    # hands out .docx and .xlsx
+    if os.name == "nt":
+        marked = os.path.join(tempfile.mkdtemp(), "notes.docx")
+        open(marked, "wb").write(b"x")
+        zone = marked + ":Zone.Identifier"
+        with open(zone, "w", encoding="utf-8") as _fh:
+            _fh.write("[ZoneTransfer]\nZoneId=3\n"
+                      "ReferrerUrl=https://example.com/page\n"
+                      "HostUrl=https://example.com/notes.docx\n")
+        scrub_mark_of_the_web(marked)
+        with open(zone, encoding="utf-8") as _fh:
+            left = _fh.read()
+        assert "ZoneId=3" in left, "the Protected View warning was thrown away"
+        assert "example.com" not in left, f"the address stayed behind :: {left}"
+        # a file that never had one must not gain one, or crash on the way past
+        plain = os.path.join(tempfile.mkdtemp(), "plain.bin")
+        open(plain, "wb").write(b"x")
+        scrub_mark_of_the_web(plain)
+        assert not os.path.exists(plain + ":Zone.Identifier")
 
     # a version check that could not reach the internet has learned nothing,
     # and has to say nothing rather than "you are up to date"

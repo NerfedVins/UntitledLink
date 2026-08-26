@@ -68,12 +68,23 @@ def accept_language() -> str:
     """Tor Browser sends q=0.5, so an app claiming to be one has to as well."""
     return "en-US,en;q=0.5" if TOR_MODE else "en-US,en;q=0.9"
 
+# What each extension is, for links that carry one. Missing an extension
+# here is not a wrong answer but an invisible link: the scraper collects what
+# it can name, so anything absent is never listed at all.
+#
+# .ts is the awkward one - an MPEG transport stream, which is what an HLS
+# stream is cut into, and also TypeScript source. Video is the reading that
+# belongs in a downloader, and the content type settles it on the way past.
 FILE_EXT = {
-    "image": ".jpg .jpeg .png .gif .webp .bmp .avif .tiff",
-    "video": ".mp4 .webm .mkv .mov .avi .m4v",
-    "audio": ".mp3 .m4a .opus .ogg .wav .flac",
-    "doc": ".pdf .epub .docx .xlsx .pptx .txt .csv",
-    "archive": ".zip .rar .7z .tar .gz .iso",
+    "image": ".jpg .jpeg .jfif .png .gif .webp .bmp .avif .tif .tiff .svg "
+             ".heic .heif .ico",
+    "video": ".mp4 .webm .mkv .mov .avi .m4v .mpg .mpeg .ts .m2ts .mts .flv "
+             ".wmv .3gp .ogv",
+    "audio": ".mp3 .m4a .m4b .aac .opus .ogg .oga .wav .flac .wma .aiff .aif "
+             ".mka",
+    "doc": ".pdf .epub .mobi .azw3 .doc .docx .xls .xlsx .ppt .pptx .odt .ods "
+            ".odp .rtf .txt .md .csv",
+    "archive": ".zip .rar .7z .tar .gz .tgz .bz2 .xz .zst .iso .cab .dmg",
 }
 EXT_KIND = {e: k for k, exts in FILE_EXT.items() for e in exts.split()}
 
@@ -3421,6 +3432,16 @@ def selftest():
 
     assert kind_of("https://x.com/p/photo.WEBP") == "image"
     assert kind_of("https://x.com/page") is None
+    # the ones that used to be invisible: an audiobook, a lecture recording
+    # cut into transport streams, an old Word file, a subtitle-sized archive
+    for _url, _kind in (("https://x/a.m4b", "audio"), ("https://x/a.aac", "audio"),
+                        ("https://x/s.ts", "video"), ("https://x/v.flv", "video"),
+                        ("https://x/d.doc", "doc"), ("https://x/d.odt", "doc"),
+                        ("https://x/n.md", "doc"), ("https://x/i.svg", "image"),
+                        ("https://x/p.heic", "image"), ("https://x/a.tgz", "archive"),
+                        ("https://x/a.xz", "archive")):
+        assert kind_of(_url) == _kind, f"{_url} read as {kind_of(_url)}"
+    assert kind_of("https://x/notes.tar.gz") == "archive", "double extensions"
     assert name_from_url("https://x.com/a/b%20c.png?z=1") == "b c.png"
     assert safe_name('a:b/c?d*e"f<g>h|i') == "a_b_c_d_e_f_g_h_i"
     assert safe_name("  spaced  ") == "spaced"

@@ -2064,6 +2064,7 @@ class App:
         self.build()
         root.protocol("WM_DELETE_WINDOW", self.close)
         self.tick = root.after(80, self.pump)
+        root.deiconify()             # built, sized and filled: now show it
         self.ytdlp_checked = False   # the update rides along with the first scan
         # After the window is drawn, not during: started here it competed with
         # the build for the interpreter and cost more than it saved - measured
@@ -4202,6 +4203,10 @@ def ui_selftest():
     try:
         root.withdraw()
         app = App(root)
+        # Tk shows its window the moment it is created, so a small white square
+        # sat on screen through the whole build and then jumped to full size.
+        # App hides it and brings it back finished - and has to bring it back.
+        assert root.state() == "normal", "the window was left hidden"
 
         # Buttons must be controls, not Labels wearing a click handler: only a
         # real one takes Tab focus and announces itself to a screen reader.

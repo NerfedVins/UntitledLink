@@ -2848,6 +2848,21 @@ class App:
             bits.append(self.t("chip_no_ffmpeg"))
         self.settings_hint.config(text="  ".join(bits))
 
+    def switch(self, parent, key: str, var: tk.BooleanVar) -> tk.Checkbutton:
+        """A settings checkbox: the label is the heading, the box is the state.
+
+        Six of these are the same eleven arguments, and they were written out
+        six times. The label carries the weight of a heading because the
+        section rules above it do the structural work.
+        """
+        box = tk.Checkbutton(
+            parent, text=self.t(key), variable=var,
+            bg=C["bg"], fg=C["fg"], font=self.fb, selectcolor=C["panel"],
+            activebackground=C["bg"], activeforeground=C["green"],
+            highlightthickness=0, borderwidth=0, cursor="hand2", anchor="w")
+        box.pack(fill="x", padx=20)
+        return box
+
     def open_settings(self):
         win = tk.Toplevel(self.root)
         win.title(self.t("dlg_title"))
@@ -2929,11 +2944,7 @@ class App:
                      textvariable=self.quality_var).pack(anchor="w", padx=20)
         hint(self.t("dlg_quality_hint"))
 
-        tk.Checkbutton(body, text=self.t("dlg_subs"), variable=self.subs_var,
-                       bg=C["bg"], fg=C["fg"], font=self.fb, selectcolor=C["panel"],
-                       activebackground=C["bg"], activeforeground=C["green"],
-                       highlightthickness=0, borderwidth=0,
-                       cursor="hand2", anchor="w").pack(fill="x", padx=20)
+        self.switch(body, "dlg_subs", self.subs_var)
         hint(self.t("dlg_subs_hint"))
 
         head(self.t("dlg_parallel"))
@@ -2959,18 +2970,10 @@ class App:
                  wraplength=420, justify="left").pack(fill="x", padx=20)
 
         section(self.t("sec_privacy"))
-        tk.Checkbutton(body, text=self.t("dlg_tor"), variable=self.tor_var,
-                       bg=C["bg"], fg=C["fg"], font=self.fb, selectcolor=C["panel"],
-                       activebackground=C["bg"], activeforeground=C["green"],
-                       highlightthickness=0, borderwidth=0,
-                       cursor="hand2", anchor="w").pack(fill="x", padx=20)
+        self.switch(body, "dlg_tor", self.tor_var)
         hint(self.t("dlg_tor_hint"))
 
-        tk.Checkbutton(body, text=self.t("dlg_private"), variable=self.private_var,
-                       bg=C["bg"], fg=C["fg"], font=self.fb, selectcolor=C["panel"],
-                       activebackground=C["bg"], activeforeground=C["green"],
-                       highlightthickness=0, borderwidth=0,
-                       cursor="hand2", anchor="w").pack(fill="x", padx=20)
+        self.switch(body, "dlg_private", self.private_var)
         hint(self.t("dlg_private_hint"))
 
         # proxy ------------------------------------------------------------
@@ -3025,19 +3028,11 @@ class App:
             if e.widget is win else None), add="+")
         sync()
 
-        tk.Checkbutton(body, text=self.t("dlg_quiet"), variable=self.quiet_var,
-                       bg=C["bg"], fg=C["fg"], font=self.fb, selectcolor=C["panel"],
-                       activebackground=C["bg"], activeforeground=C["green"],
-                       highlightthickness=0, borderwidth=0,
-                       cursor="hand2", anchor="w").pack(fill="x", padx=20)
+        self.switch(body, "dlg_quiet", self.quiet_var)
         hint(self.t("dlg_quiet_hint"))
 
         # metadata + attempts ----------------------------------------------
-        tk.Checkbutton(body, text=self.t("dlg_strip"), variable=self.clean_var,
-                       bg=C["bg"], fg=C["fg"], font=self.fb, selectcolor=C["panel"],
-                       activebackground=C["bg"], activeforeground=C["green"],
-                       highlightthickness=0, borderwidth=0,
-                       cursor="hand2", anchor="w").pack(fill="x", padx=20)
+        self.switch(body, "dlg_strip", self.clean_var)
         hint(self.t("dlg_strip_hint"))
 
         section(self.t("sec_window"))
@@ -3050,11 +3045,7 @@ class App:
         lang_box.pack(anchor="w", padx=20)
         hint(self.t("dlg_lang_note"))
 
-        tk.Checkbutton(body, text=self.t("dlg_dblclick"), variable=self.dblclick_var,
-                       bg=C["bg"], fg=C["fg"], font=self.fb, selectcolor=C["panel"],
-                       activebackground=C["bg"], activeforeground=C["green"],
-                       highlightthickness=0, borderwidth=0,
-                       cursor="hand2", anchor="w").pack(fill="x", padx=20)
+        self.switch(body, "dlg_dblclick", self.dblclick_var)
         hint(self.t("dlg_dblclick_hint"))
 
         # buttons ----------------------------------------------------------

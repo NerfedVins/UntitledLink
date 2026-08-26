@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""convertex - paste a link, see what is downloadable, grab it clean.
+"""UntitledLink - paste a link, see what is downloadable, grab it clean.
 
 Media links go through yt-dlp (YouTube, X/Twitter, Instagram, TikTok, Reddit, ...).
 Anything else falls back to scraping the page for images and files.
@@ -32,7 +32,7 @@ from urllib.parse import urljoin, urlparse, unquote, parse_qs, urlencode
 
 from i18n import COOKIE_BROWSERS, LANGUAGES, NO_COOKIES, Tr
 
-APP = "convertex"
+APP = "UntitledLink"
 VERSION = "0.1.0"
 
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "

@@ -1,4 +1,4 @@
-"""Translations for convertex.
+"""Translations for UntitledLink.
 
 UI chrome and status lines are translated. Log lines stay English on purpose:
 they are diagnostics, and an English log is the one you can paste into a bug

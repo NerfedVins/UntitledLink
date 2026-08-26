@@ -1,0 +1,12 @@
+# Text files keep LF in the repository and arrive as LF everywhere. Without
+# this, every commit from Windows warned about CRLF and a Linux checkout could
+# end up with mixed endings.
+* text=auto eol=lf
+
+# Windows needs CRLF in these two or cmd and wscript can misread them.
+*.bat text eol=crlf
+*.vbs text eol=crlf
+
+# Never touched: binaries and the exe.
+*.png binary
+*.exe binary

@@ -2,18 +2,18 @@
 cd /d "%~dp0"
 
 REM Two ways in:
-REM   (no argument) a double click. Hands straight over to Convertex.vbs, which
+REM   (no argument) a double click. Hands straight over to UntitledLink.vbs, which
 REM                 does the everyday launch with no console at all. Windows
 REM                 still shows this one for the second it takes to start cmd,
-REM                 which is why Convertex.vbs is the one to double-click.
+REM                 which is why UntitledLink.vbs is the one to double-click.
 REM   setup         the first run, or after an edit to requirements.txt. Runs
 REM                 pip where it can be watched, then starts the app. This is
-REM                 also where Convertex.vbs sends anyone whose stamp file is
+REM                 also where UntitledLink.vbs sends anyone whose stamp file is
 REM                 stale, or whose pythonw it could not start.
 
 if "%~1"=="setup" goto :setup
-if exist "%~dp0Convertex.vbs" (
-    start "" wscript //nologo "%~dp0Convertex.vbs"
+if exist "%~dp0UntitledLink.vbs" (
+    start "" wscript //nologo "%~dp0UntitledLink.vbs"
     exit /b 0
 )
 
@@ -54,11 +54,11 @@ REM A crash before the window appears has no console to print to, so the app
 REM writes crash.log beside itself and shows the error in a dialog.
 where pythonw >nul 2>&1
 if errorlevel 1 goto :no_pythonw
-start "" pythonw convertex.py
+start "" pythonw untitledlink.py
 exit /b 0
 
 :no_pythonw
 REM No pythonw (a stripped or non-standard install). Fall back to python and
 REM keep the window, because it is the only place an error could show up.
-python convertex.py
+python untitledlink.py
 if errorlevel 1 pause

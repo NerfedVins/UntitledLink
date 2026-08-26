@@ -27,7 +27,7 @@ End If
 If ready Then
     shell.CurrentDirectory = folder
     On Error Resume Next
-    shell.Run "pythonw convertex.py", 0, False
+    shell.Run "pythonw untitledlink.py", 0, False
     If Err.Number = 0 Then
         WScript.Quit
     End If

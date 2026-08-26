@@ -1,10 +1,10 @@
-# convertex
+# UntitledLink
 
 Paste a link, see what is downloadable, take it clean.
 
 ## Run
 
-Double-click **`Convertex.vbs`**. It installs anything missing and opens the
+Double-click **`UntitledLink.vbs`**. It installs anything missing and opens the
 app. Nothing else to set up.
 
 **It starts in about half the time it used to.** requests, bs4 and Pillow cost
@@ -16,7 +16,7 @@ in VBScript rather than starting a python to compare two dates. Time from
 double-click to a window on screen: about 850ms, against 1.6s at its best
 before.
 
-**Nothing but the app appears.** `Convertex.vbs` runs the launcher with no
+**Nothing but the app appears.** `UntitledLink.vbs` runs the launcher with no
 console at all, and the app itself is started with `pythonw`, the console-less
 python. `run.bat` does the same work and still works, but Windows insists on
 showing a console for the second it takes to start any batch file, which is the
@@ -48,7 +48,7 @@ writes `crash.log` next to the app and shows the error in a dialog.
 
 ### Standalone exe
 
-`build.bat` produces `dist\convertex.exe`. That one file is the whole program:
+`build.bat` produces `dist\UntitledLink.exe`. That one file is the whole program:
 Python, yt-dlp, requests, Pillow and **ffmpeg** are all inside it. The machine
 that runs it needs nothing installed and downloads nothing on first launch.
 
@@ -64,7 +64,7 @@ The build refuses to continue if ffmpeg is missing rather than quietly shipping
 a crippled exe.
 
 **Where settings go.** Beside the exe when that folder is writable, so a copy on
-a USB stick stays self-contained. In `%APPDATA%\convertex` when it is not - an exe
+a USB stick stays self-contained. In `%APPDATA%\UntitledLink` when it is not - an exe
 in Program Files cannot write next to itself, and silently losing every setting
 is a miserable way to discover that.
 
@@ -228,7 +228,7 @@ duration, views, likes, codec, bitrate, container, and the source URL.
 ### One thing worth knowing about image sizes
 
 A scraped thumbnail is previewed at thumbnail size but downloaded at full size,
-because convertex upgrades the URL. Reporting the preview's dimensions would
+because UntitledLink upgrades the URL. Reporting the preview's dimensions would
 describe the wrong file, so the real ones are fetched separately. When they
 cannot be read the cell stays **empty** rather than showing a number that is not
 what you will get.
@@ -288,7 +288,7 @@ back as "No video could be found", which used to fall through to scraping - and
 scraping x.com logged-out returns avatars and interface icons, so it looked like
 the app simply did not work.
 
-convertex now falls back to X's public embed API, the one that powers embedded
+UntitledLink now falls back to X's public embed API, the one that powers embedded
 tweets. It returns the real media as JSON, including photos, which are fetched at
 `?name=orig` - the untouched upload, not the display-sized copy.
 
@@ -379,7 +379,7 @@ the site sees your real IP - no application can change that.
 ## Testing it
 
 ```
-python convertex.py --selftest
+python untitledlink.py --selftest
 ```
 
 Checks the metadata strippers, the thumbnail-upgrade rules, the resolution table
@@ -503,7 +503,7 @@ way. Only a proxy changes that, and the two are separate switches on purpose.
 
 ## The exe
 
-`build.bat` produces a single ~87MB `convertex.exe` with Python, yt-dlp, ffmpeg
+`build.bat` produces a single ~87MB `UntitledLink.exe` with Python, yt-dlp, ffmpeg
 and the certificates inside it. Verified by copying it to an empty folder with
 no ffmpeg on PATH and running its self-test: it passes, which includes finding
 its own ffmpeg. Nothing needs installing on the machine that runs it.

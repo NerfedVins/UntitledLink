@@ -1,6 +1,6 @@
 @echo off
 cd /d "%~dp0"
-echo Building a standalone convertex.exe. Nothing needs to be installed on the
+echo Building a standalone UntitledLink.exe. Nothing needs to be installed on the
 echo machine that runs it - Python, yt-dlp and ffmpeg all go inside the exe.
 echo.
 
@@ -31,18 +31,18 @@ REM support" the first time anyone ticked the box.
 REM
 REM ffprobe is deliberately not bundled: nothing in this app calls it, and it
 REM is another 100 MB of exe for nothing.
-pyinstaller --noconfirm --onefile --windowed --name convertex ^
+pyinstaller --noconfirm --onefile --windowed --name UntitledLink ^
     --collect-all yt_dlp ^
     --collect-all imageio_ffmpeg ^
     --collect-all certifi ^
     --hidden-import PIL._tkinter_finder ^
     --hidden-import socks ^
     --hidden-import urllib3.contrib.socks ^
-    convertex.py
+    untitledlink.py
 if errorlevel 1 goto :fail
 
 echo.
-echo Built: dist\convertex.exe
+echo Built: dist\UntitledLink.exe
 echo Ship that single file. It needs nothing else installed.
 echo.
 echo Before shipping, smoke-test it on a machine without Python:

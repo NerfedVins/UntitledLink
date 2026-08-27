@@ -4312,10 +4312,15 @@ class App:
                 speed[index] = done / elapsed if elapsed > 0.5 else 0.0
                 report()
 
+            # Once, not per attempt: the .part lives here, so a failure that
+            # cleans up after itself has to be told the same place the file was
+            # being written to. Told the batch folder instead, it looked for a
+            # .part that was never there and left the real one in the row's own
+            # folder for good. Making the folder every retry was the other half.
+            where = target_dir(outdir, it, grouped)
             try:
                 for attempt in range(1, tries + 1):
                     try:
-                        where = target_dir(outdir, it, grouped)
                         if it.via == "text":
                             landed = write_text(it, where)
                         elif it.via == "ytdlp":
@@ -4344,7 +4349,7 @@ class App:
                         self.log(f"cancelled :: {it.name}", "warn")
                         return
                     except Permanent as exc:
-                        drop_part(it, outdir)
+                        drop_part(it, where)
                         with lock:
                             tally["fail"] += 1
                             beaten.append(index)
@@ -4352,7 +4357,7 @@ class App:
                         return
                     except Exception as exc:
                         if attempt == tries:
-                            drop_part(it, outdir)
+                            drop_part(it, where)
                             with lock:
                                 tally["fail"] += 1
                                 beaten.append(index)
@@ -5356,6 +5361,18 @@ def selftest():
     # same name, different url must not collide
     a, b = Item("https://h/1/f.bin", "f.bin", "file"), Item("https://h/2/f.bin", "f.bin", "file")
     assert part_path(tmpdir, a.name, a.url) != part_path(tmpdir, b.name, b.url)
+
+    # a row that lands in a folder of its own leaves its .part there too, so
+    # the cleanup has to be handed the same folder the download was. Handed
+    # the batch folder instead it removes nothing, and the .part stays for good
+    nested = Item("https://h/f.bin", "f.bin", "file", folder="A Lecture")
+    nest = target_dir(tmpdir, nested, True)
+    litter = part_path(nest, nested.name, nested.url)
+    open(litter, "wb").write(b"half")
+    drop_part(nested, tmpdir)
+    assert os.path.exists(litter), "drop_part is not looking in a directory"
+    drop_part(nested, nest)
+    assert not os.path.exists(litter), "the .part outlived the download"
 
     global SETTINGS_FILE
     keep = SETTINGS_FILE

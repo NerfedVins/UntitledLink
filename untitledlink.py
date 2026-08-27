@@ -645,11 +645,12 @@ class Item:
     """
 
     __slots__ = ("url", "name", "kind", "quality", "res", "length", "size",
-                 "via", "fmt", "thumb", "info", "details", "page", "folder")
+                 "via", "fmt", "thumb", "info", "details", "page", "folder",
+                 "text")
 
     def __init__(self, url, name, kind, size=0, via="file", fmt=None, thumb=None,
                  info="", details="", quality="", length="", res="", page="",
-                 folder=""):
+                 folder="", text=""):
         self.url, self.name, self.kind = url, name, kind
         self.quality = quality  # "1080p mp4", "mp3 320k" - display only
         self.res = res          # "1080x1920"; a column, not a word inside info
@@ -667,6 +668,9 @@ class Item:
         # one lecture page land together instead of loose among everything
         # else that was ever downloaded.
         self.folder = folder
+        # For the page's own words: the row carries the text it would save, so
+        # ticking it costs no second visit to the site.
+        self.text = text
 
 
 def checkbox_images(size: int = CHECKBOX) -> dict:
@@ -1151,7 +1155,7 @@ def probe_all(items: list[Item], s: requests.Session,
     from concurrent.futures import ThreadPoolExecutor
 
     def probe(it: Item):
-        if it.via == "ytdlp":
+        if it.via in ("ytdlp", "text"):
             # A manifest has a size of its own and it means nothing: two
             # kilobytes of text listing an hour of video.
             return it
@@ -1225,6 +1229,52 @@ def embed_urls(soup, base: str) -> list[str]:
         if any(ie.suitable(full) for ie in _EXTRACTORS):
             out.append(full)
     return out
+
+
+def readable_text(soup, title: str, url: str) -> str:
+    """The page as something you can read, search and print.
+
+    Not the raw text: a page's furniture - menus, cookie banners, footers -
+    is most of what get_text() returns. What is left keeps the shape that
+    matters for a page of exercises: headings stay headings, numbered
+    questions stay separate lines, list items keep their bullets.
+
+    Written as plain text with markdown's markers rather than as .md, because
+    a .txt opens in anything and the markers cost nothing to anyone who does
+    not want them.
+    """
+    from bs4 import NavigableString
+    body = soup.body or soup
+    for junk in body.find_all(["script", "style", "noscript", "nav", "header",
+                               "footer", "aside", "form", "iframe", "svg"]):
+        junk.decompose()
+
+    lines: list[str] = [f"# {title}"] if title else []
+    for tag in body.find_all(["h1", "h2", "h3", "h4", "h5", "h6", "p", "li",
+                              "tr", "pre", "blockquote"]):
+        text = " ".join(tag.get_text(" ", strip=True).split())
+        if not text:
+            continue
+        if tag.name.startswith("h") and tag.name[1:].isdigit():
+            lines.append("")
+            lines.append("#" * min(int(tag.name[1]) + 1, 6) + " " + text)
+        elif tag.name == "li":
+            lines.append(f"- {text}")
+        elif tag.name == "tr":
+            cells = [" ".join(c.get_text(" ", strip=True).split())
+                     for c in tag.find_all(["td", "th"])]
+            lines.append(" | ".join(c for c in cells if c))
+        elif tag.name == "blockquote":
+            lines.append(f"> {text}")
+        else:
+            lines.append("")
+            lines.append(text)
+
+    out: list[str] = []
+    for line in lines:
+        if line or (out and out[-1]):     # never more than one blank in a row
+            out.append(line)
+    return "\n".join(out).strip() + "\n"
 
 
 def scrape_page(url: str, proxy: str | None, log, embeds: bool = True,
@@ -1331,6 +1381,18 @@ def scrape_page(url: str, proxy: str | None, log, embeds: bool = True,
     else:
         log(f"{len(items)} candidates, probing sizes and full-res variants...")
         items = probe_all(items, s, workers)
+    # The page's own words, always offered and never fetched twice: the text
+    # is taken from the html already in hand. A page of exercises is a file
+    # somebody wants as often as the pdfs linked from it.
+    words = readable_text(soup, titled, url)
+    if len(words.split()) >= 25:      # a menu and a login box are not a page
+        # The trimmed title, the same one the folder uses: a file called
+        # "Exercises 3.txt" beats "Exercises 3 _ eClass University.txt".
+        items.append(Item(url, (holder or safe_name(urlparse(url).netloc)) + ".txt",
+                          "doc", size=len(words.encode("utf-8")), via="text",
+                          page=url, folder=holder, info="page text",
+                          text=words))
+
     items.sort(key=lambda i: (i.kind, -i.size))
 
     # Embedded video goes on top: on a page that has one, it is usually the
@@ -1927,6 +1989,15 @@ def resume_plan(have: int, status: int, length: int) -> tuple[str, int, int]:
     if have and status == 206:
         return "ab", have, have + length
     return "wb", 0, length
+
+
+def write_text(it: Item, outdir: str) -> str:
+    """Save the page's words. No request: the text came back with the scan."""
+    with NAME_LOCK:
+        dest = unique_path(os.path.join(outdir, safe_name(it.name)))
+        with open(dest, "w", encoding="utf-8") as fh:
+            fh.write(it.text)
+    return dest
 
 
 def target_dir(outdir: str, it: Item, grouped: bool) -> str:
@@ -3073,7 +3144,7 @@ class App:
         came back with a size already, and yt-dlp's rows - whose URL is a page
         rather than a file - are left alone.
         """
-        if it.size or it.via == "ytdlp" or index in self.sized:
+        if it.size or it.via in ("ytdlp", "text") or index in self.sized:
             return
         self.sized.add(index)
         threading.Thread(
@@ -3835,7 +3906,9 @@ class App:
                 for attempt in range(1, tries + 1):
                     try:
                         where = target_dir(outdir, it, grouped)
-                        if it.via == "ytdlp":
+                        if it.via == "text":
+                            landed = write_text(it, where)
+                        elif it.via == "ytdlp":
                             landed = download_media(it, where, proxy, quality,
                                                     clean, progress, cookies,
                                                     subs)
@@ -4465,6 +4538,31 @@ def selftest():
         assert load_history() == [], "a missing file must read as an empty list"
     finally:
         HISTORY_FILE = keep_hist
+
+    # the page's own words, kept as a file: menus and scripts out, headings,
+    # questions and table rows in
+    from bs4 import BeautifulSoup as _Soup2
+    lesson = ("<html><body><nav>Home Menu Login</nav><h1>Exercises 3</h1>"
+              "<p>Answer the questions below.</p>"
+              "<ol><li>What is a matrix?</li><li>Give an example.</li></ol>"
+              "<table><tr><th>A</th><th>B</th></tr><tr><td>1</td><td>2</td></tr>"
+              "</table><script>var x=1;</script><footer>copyright</footer>"
+              "</body></html>")
+    words = readable_text(_Soup2(lesson, "html.parser"), "Exercises 3", "https://h/x")
+    assert "What is a matrix?" in words and "- Give an example." in words
+    assert "# Exercises 3" in words, "the title leads the file"
+    assert "1 | 2" in words, "a table row keeps its cells apart"
+    assert "var x=1" not in words and "copyright" not in words,         f"the furniture came with it :: {words}"
+    assert "Home Menu Login" not in words, "the menu is not the page"
+    assert ("\n\n\n" not in words), "never more than one blank line"
+
+    # and it is written without asking the site for anything
+    text_dir = tempfile.mkdtemp()
+    page_row = Item("https://h/x", "Exercises 3.txt", "doc", via="text",
+                    text=words)
+    written = write_text(page_row, text_dir)
+    assert os.path.basename(written) == "Exercises 3.txt"
+    assert open(written, encoding="utf-8").read() == words
 
     # a folder per page: forty handouts from one lecture land together, and a
     # single video does not get a folder of its own unless asked

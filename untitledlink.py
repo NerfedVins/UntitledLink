@@ -3608,12 +3608,22 @@ class App:
         put it off the edge of the app entirely. A panel over the window
         cannot land anywhere else, cannot be lost behind anything, and closes
         with Escape like the dialog did.
+
+        Over the window rather than instead of it: filling the whole thing was
+        a Toplevel again in everything but name, with nothing left on screen to
+        say what you were in the middle of. A card in the middle, sized as a
+        fraction of the window so it fits whatever the window is, leaves the
+        results visible around it.
         """
         if getattr(self, "settings_panel", None):
             return                      # already open; one is enough
-        win = tk.Frame(self.root, bg=C["bg"], highlightthickness=1,
+        win = tk.Frame(self.root, bg=C["bg"], highlightthickness=2,
                        highlightbackground=C["line"])
-        win.place(relx=0, rely=0, relwidth=1, relheight=1)
+        # Fractions, not pixels: the smallest this window goes is 940x540 and
+        # the largest is the screen, and a card that fits one would be wrong on
+        # the other.
+        win.place(relx=0.5, rely=0.5, anchor="center",
+                  relwidth=0.56, relheight=0.84)
         self.settings_panel = win
 
         head_bar = tk.Frame(win, bg=C["bg"])
@@ -5276,7 +5286,10 @@ def ui_selftest():
         dlg[0].update_idletasks()
         buttons = [w for w in walk(dlg[0]) if isinstance(w, ttk.Button)]
         assert buttons, "no buttons in the settings dialog"
-        assert dlg[0].winfo_height() <= root.winfo_height() + 2,             f"the panel is {dlg[0].winfo_height()}px in a {root.winfo_height()}px window"
+        # a card over the window, not the whole window wearing a border: it
+        # has to leave the results visible around it on both axes
+        assert dlg[0].winfo_height() < root.winfo_height(),             f"the panel is {dlg[0].winfo_height()}px in a {root.winfo_height()}px window"
+        assert dlg[0].winfo_width() < root.winfo_width(),             f"the panel is {dlg[0].winfo_width()}px in a {root.winfo_width()}px window"
         for b in buttons:
             if b.cget("text") in (app.t("save"), app.t("cancel")):
                 bottom = b.winfo_rooty() + b.winfo_height()

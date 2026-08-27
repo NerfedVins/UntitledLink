@@ -3,6 +3,12 @@
 # The Windows exe goes through build.bat rather than a copy of its flags, so
 # the exe CI ships is the exe the build file makes - a second list of
 # PyInstaller flags here would drift within a month.
+#
+# The macOS list below is exactly that second list, because a .app is not
+# something build.bat can make, and it drifted: it was three hidden imports
+# behind before anyone built with it. There is no build.sh to point at yet, so
+# the guard is the line that runs the built app's own suite - which is what
+# would have caught it. Add flags to one of the two and check the other.
 name: release
 
 on:
@@ -53,6 +59,14 @@ jobs:
           iconutil -c icns icon.iconset -o icon.icns
 
       # No --onefile: a .app is a folder and macOS expects it that way.
+      #
+      # The three hidden imports are the three build.bat carries, for the
+      # same reasons: each is imported by name at the moment it is needed, so
+      # nothing static sees it. They were missing here, which is what a second
+      # list of flags costs. PIL._tkinter_finder is what lets a frozen build
+      # hand an image to Tk; socks and its urllib3 adapter are what requests
+      # reaches for the first time a socks5h:// proxy is used, which is the
+      # tor switch.
       - name: Build
         run: |
           pyinstaller --noconfirm --windowed --name UntitledLink \
@@ -61,9 +75,21 @@ jobs:
             --collect-all imageio_ffmpeg \
             --collect-all certifi \
             --collect-all docx \
+            --hidden-import PIL._tkinter_finder \
+            --hidden-import socks \
+            --hidden-import urllib3.contrib.socks \
             --add-data "icon.png:." \
             --add-data "icon.ico:." \
             untitledlink.py
+
+      # The line the windows job already has, and the one the release notes
+      # have been promising for both. The suite above ran against the source,
+      # which says nothing about whether the thing being uploaded starts. It
+      # builds the real window, and the mark column goes through PIL and Tk
+      # together - so a frozen build missing either answers with an exit code.
+      - name: The app has to pass its own suite before anyone downloads it
+        run: dist/UntitledLink.app/Contents/MacOS/UntitledLink --selftest
+
       - run: ditto -c -k --keepParent dist/UntitledLink.app UntitledLink-macos.zip
       - uses: actions/upload-artifact@v4
         with:

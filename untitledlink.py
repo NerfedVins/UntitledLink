@@ -2350,13 +2350,28 @@ class App:
         try:
             # .ico is the only thing Windows takes for a title bar and a task
             # bar; everywhere else Tk wants the image itself.
+            #
+            # default= rather than a plain call: it sets the icon for every
+            # window this app opens from now on, which is how the downloads
+            # window ended up wearing Tk's feather while the main one did not.
             if os.name == "nt":
-                root.iconbitmap(resource("icon.ico"))
+                root.iconbitmap(default=resource("icon.ico"))
             else:
                 self.icon = tk.PhotoImage(file=resource("icon.png"))
                 root.iconphoto(True, self.icon)
         except Exception:
             pass       # an icon is not worth refusing to open a window over
+        try:
+            # Windows groups task bar buttons by the program that owns them,
+            # so a python script borrows python's icon no matter what its
+            # windows say. Claiming an id of our own is what separates them;
+            # the frozen build has its own exe and does not need it, and it
+            # costs nothing there either.
+            import ctypes
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+                f"{APP}.{VERSION}")
+        except Exception:
+            pass       # not Windows, or an older shell: the icon is cosmetic
         root.configure(bg=C["bg"])
         root.geometry("1140x700")
         root.minsize(940, 540)
@@ -5627,6 +5642,13 @@ def ui_selftest():
                              Item("https://h/b.mp4", "b.mp4", "video", 200)], None))
         app.pump()
         rows = app.tree.get_children()
+
+        # every window this app opens wears its own icon, not Tk's feather:
+        # default= is what carries it to the ones opened later
+        # No assertion for the window icon on Windows: Tk takes an .ico and
+        # then reports nothing back for it, default or not, so there is no
+        # answer to check. What can be checked is that the file ships, which
+        # the resource() test above does; the title bars were looked at.
 
         # the downloads list: what landed, and the way back to it. Memory
         # only, because a history file is what the private session promises

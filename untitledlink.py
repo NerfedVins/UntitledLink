@@ -889,11 +889,43 @@ def patience(proxy: str | None) -> float:
     return 2.5 if proxy else 1.0
 
 
-def session_for(proxy: str | None) -> requests.Session:
+# One jar per browser, kept for the session. Reading them means decrypting
+# the browser's cookie store, which takes long enough to notice and is the
+# same answer every time.
+_COOKIE_JARS: dict = {}
+
+
+def browser_cookies(browser: str, log=None):
+    """The cookies your browser holds, for pages that want a login.
+
+    yt-dlp has been reading these all along for its own downloads; the page
+    scraper arrived at every eClass and quiz page as a stranger, which is why
+    they came back as their login screens.
+
+    A cookie jar sends a cookie only to the site that set it, so this hands
+    nothing to anybody who did not already have it.
+    """
+    if not browser:
+        return None
+    if browser not in _COOKIE_JARS:
+        try:
+            from yt_dlp.cookies import extract_cookies_from_browser
+            _COOKIE_JARS[browser] = extract_cookies_from_browser(browser)
+        except Exception as exc:
+            if log:
+                log(f"could not read {browser} cookies :: {exc}", "warn")
+            _COOKIE_JARS[browser] = None
+    return _COOKIE_JARS[browser]
+
+
+def session_for(proxy: str | None, cookies: str = "") -> requests.Session:
     import requests
     s = requests.Session()
     s.headers.update({"User-Agent": user_agent(),
                       "Accept-Language": accept_language()})
+    jar = browser_cookies(cookies)
+    if jar is not None:
+        s.cookies = jar
     if proxy:
         s.proxies = {"http": proxy, "https": proxy}
     return s
@@ -1348,7 +1380,8 @@ def readable_text(soup, title: str, url: str) -> str:
 
 
 def scrape_page(url: str, proxy: str | None, log, embeds: bool = True,
-                workers: int = PARALLEL, quiet: bool = False) -> list[Item]:
+                workers: int = PARALLEL, quiet: bool = False,
+                cookies: str = "") -> list[Item]:
     """Every downloadable thing a page links to.
 
     quiet=True is the discreet scan: the page is read and nothing else is
@@ -1356,7 +1389,7 @@ def scrape_page(url: str, proxy: str | None, log, embeds: bool = True,
     then - which is one request per row you look at instead of one per link on
     the page, plus the extra HEADs a full-resolution hunt costs.
     """
-    s = session_for(proxy)
+    s = session_for(proxy, cookies)
     # streamed so the body can be read in a bounded slice below
     try:
         r = s.get(url, timeout=WAIT_PAGE * patience(proxy), stream=True)
@@ -1903,7 +1936,8 @@ def scan(url: str, proxy: str | None, log, cookies: str = "",
             # and interface icons, which is why they are excluded by name.
             try:
                 items = items + scrape_page(url, proxy, log, embeds=False,
-                                            workers=workers, quiet=quiet)
+                                            workers=workers, quiet=quiet,
+                                            cookies=cookies)
             except Exception as exc:
                 log(f"the page itself would not scrape :: {exc}")
         return items
@@ -1929,7 +1963,8 @@ def scan(url: str, proxy: str | None, log, cookies: str = "",
         raise RuntimeError(" :: ".join(p for p in parts if p))
 
     log("not a known media site - scraping the page...")
-    return scrape_page(url, proxy, log, workers=workers, quiet=quiet)
+    return scrape_page(url, proxy, log, workers=workers, quiet=quiet,
+                       cookies=cookies)
 
 
 # --------------------------------------------------------------------------
@@ -2112,8 +2147,8 @@ def target_dir(outdir: str, it: Item, grouped: bool) -> str:
 
 
 def download_file(it: Item, outdir: str, proxy: str | None, clean: bool,
-                  progress, attempt: int = 1) -> str:
-    s = session_for(proxy)
+                  progress, attempt: int = 1, cookies: str = "") -> str:
+    s = session_for(proxy, cookies)
     # Stable .part name so a retry picks up where the last attempt stopped;
     # the unique suffix is only decided once the file is whole.
     part = part_path(outdir, it.name, it.url)
@@ -3249,7 +3284,8 @@ class App:
             daemon=True).start()
 
     def _size_worker(self, index, url, referer, token, proxy):
-        size, ctype, offered = head(session_for(proxy), url, referer)
+        size, ctype, offered = head(session_for(proxy, self.cookies()),
+                                    url, referer)
         self.q.put(("size", (index, size, token, offered), ctype))
 
     def _thumb_worker(self, url, real_url, token, proxy):
@@ -3257,7 +3293,7 @@ class App:
             from PIL import ImageTk  # noqa: F401  (imported for the main thread)
             import io
             Image = pillow()
-            session = session_for(proxy)
+            session = session_for(proxy, self.cookies())
             r = session.get(url, timeout=20, stream=True)
             r.raise_for_status()
             # ponytail: cap the fetch - a preview never needs a 40 MB original
@@ -4015,7 +4051,8 @@ class App:
                         else:
                             with host_slot(it.url):
                                 landed = download_file(it, where, proxy, clean,
-                                                       progress, attempt)
+                                                       progress, attempt,
+                                                       cookies)
                         with lock:
                             tally["ok"] += 1
                         self.log(f"saved :: {it.name}", "ok")
@@ -4280,7 +4317,7 @@ def selftest():
                                               "content-type": "video/mp4"}})()
 
     keep_session_for = session_for
-    globals()["session_for"] = lambda proxy=None: _PageSession()
+    globals()["session_for"] = lambda proxy=None, cookies='': _PageSession()
     try:
         quiet = scrape_page("https://h/p", None, lambda *_a: None,
                             embeds=False, quiet=True)
@@ -4428,7 +4465,7 @@ def selftest():
                 "iter_content": lambda s, n: iter([b"<html>"])})()
 
     keep_session_for = session_for
-    globals()["session_for"] = lambda proxy=None: _HtmlSession()
+    globals()["session_for"] = lambda proxy=None, cookies='': _HtmlSession()
     try:
         page_dir = tempfile.mkdtemp()
         page_link = Item("https://h/song.ogg", "song.ogg", "audio")
@@ -4441,7 +4478,7 @@ def selftest():
     finally:
         globals()["session_for"] = keep_session_for
 
-    globals()["session_for"] = lambda proxy=None: _ShortSession()
+    globals()["session_for"] = lambda proxy=None, cookies='': _ShortSession()
     try:
         short_dir = tempfile.mkdtemp()
         cut = Item("https://h/x.bin", "x.bin", "file")
@@ -4532,19 +4569,31 @@ def selftest():
             return type("R", (), {"json": lambda _s, t=self.tag: {"tag_name": t}})()
 
     try:
-        globals()["session_for"] = lambda proxy=None: _Release(None)
+        globals()["session_for"] = lambda proxy=None, cookies='': _Release(None)
         assert newer_release(said.append) == "" and not said, said
-        globals()["session_for"] = lambda proxy=None: _Release("v0.0.1")
+        globals()["session_for"] = lambda proxy=None, cookies='': _Release("v0.0.1")
         assert newer_release(said.append) == "" and not said, "older is not newer"
-        globals()["session_for"] = lambda proxy=None: _Release(f"v{VERSION}")
+        globals()["session_for"] = lambda proxy=None, cookies='': _Release(f"v{VERSION}")
         assert newer_release(said.append) == "" and not said, "the same is not newer"
-        globals()["session_for"] = lambda proxy=None: _Release("v99.0.0")
+        globals()["session_for"] = lambda proxy=None, cookies='': _Release("v99.0.0")
         assert newer_release(said.append) == "v99.0.0" and said
         assert "releases/latest" in said[-1], "and it says where to get it"
     finally:
         globals()["session_for"] = keep_session
     assert version_tuple("1.2.10") > version_tuple("1.2.9"), "not a string compare"
     assert version_tuple("v0.1.0") == (0, 1, 0) and version_tuple("") == ()
+
+    # cookies reach the page scraper now, not only yt-dlp: an eClass page
+    # fetched without them is its own login screen
+    assert browser_cookies("") is None, "no browser chosen, no jar"
+    _COOKIE_JARS["madeup"] = None            # a browser that could not be read
+    assert browser_cookies("madeup") is None, "and that must not raise"
+    import http.cookiejar as _cj
+    fake_jar = _cj.CookieJar()
+    _COOKIE_JARS["pretend"] = fake_jar
+    assert session_for(None, "pretend").cookies is fake_jar,         "the jar never reached the session"
+    assert session_for(None).cookies is not fake_jar, "and only when asked for"
+    _COOKIE_JARS.pop("pretend"), _COOKIE_JARS.pop("madeup")
 
     # a slow site is not a broken one, and a slow site over tor is slower
     # still: sites.sch.gr answers in 32 seconds on a direct connection, which
@@ -4797,11 +4846,11 @@ def selftest():
     frozen = getattr(sys, "frozen", False)
     sys.frozen = False
     try:
-        globals()["session_for"] = lambda proxy=None: _Answer(None)
+        globals()["session_for"] = lambda proxy=None, cookies='': _Answer(None)
         update_ytdlp(lambda m, *a, **k: said.append(str(m)))
         assert said and "not checked" in said[-1],             f"an unreachable index must not read as up to date: {said}"
 
-        globals()["session_for"] = lambda proxy=None: _Answer(real)
+        globals()["session_for"] = lambda proxy=None, cookies='': _Answer(real)
         said.clear()
         update_ytdlp(lambda m, *a, **k: said.append(str(m)))
         assert said and said[-1] == f"yt-dlp up to date ({real})", said

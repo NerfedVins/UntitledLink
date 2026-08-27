@@ -1389,6 +1389,8 @@ def scrape_page(url: str, proxy: str | None, log, embeds: bool = True,
     then - which is one request per row you look at instead of one per link on
     the page, plus the extra HEADs a full-resolution hunt costs.
     """
+    import requests
+
     s = session_for(proxy, cookies)
     # streamed so the body can be read in a bounded slice below
     try:
@@ -3508,7 +3510,7 @@ class App:
         threading.Thread(
             target=self._thumb_worker,
             args=(it.thumb, it.url if it.kind == "image" else "", token,
-                  self.proxy()),
+                  self.proxy(), self.cookies()),
             daemon=True).start()
 
     def measure(self, index: int, it: Item):
@@ -3525,20 +3527,22 @@ class App:
         threading.Thread(
             target=self._size_worker,
             args=(index, it.url, it.page, self.scan_token,
-                  self.proxy()),
+                  self.proxy(), self.cookies()),
             daemon=True).start()
 
-    def _size_worker(self, index, url, referer, token, proxy):
-        size, ctype, offered = head(session_for(proxy, self.cookies()),
-                                    url, referer)
+    def _size_worker(self, index, url, referer, token, proxy, cookies):
+        # proxy and cookies are handed in rather than looked up: both come off
+        # Tk variables, and a worker reading one of those is reaching into an
+        # interpreter that belongs to the main thread.
+        size, ctype, offered = head(session_for(proxy, cookies), url, referer)
         self.q.put(("size", (index, size, token, offered), ctype))
 
-    def _thumb_worker(self, url, real_url, token, proxy):
+    def _thumb_worker(self, url, real_url, token, proxy, cookies):
         try:
             from PIL import ImageTk  # noqa: F401  (imported for the main thread)
             import io
             Image = pillow()
-            session = session_for(proxy, self.cookies())
+            session = session_for(proxy, cookies)
             r = session.get(url, timeout=20, stream=True)
             r.raise_for_status()
             # ponytail: cap the fetch - a preview never needs a 40 MB original
@@ -4127,24 +4131,46 @@ class App:
         self.filter_var.set("")
         self.note_facets([])
         self.stop_btn.pack(side="left", padx=(6, 0))
-        threading.Thread(target=self._scan_worker, args=(links, self.scan_token),
+        threading.Thread(target=self._scan_worker,
+                         args=(links, self.scan_token, self.scan_job()),
                          daemon=True).start()
+
+    def scan_job(self) -> dict:
+        """Every setting a scan needs, read here on the main thread.
+
+        A Tk variable belongs to the interpreter that made it, and that
+        interpreter is not thread safe. The scan worker was reading five of
+        them - proxy, cookies, worker count, the discreet-scan switch, the tor
+        box - from its own thread, which works right up until it does not:
+        driven from outside a running main loop it raises "main thread is not
+        in main loop" outright, and inside one it is a corruption waiting for
+        the wrong moment rather than an error anybody sees.
+
+        The download worker has been handed its settings as arguments all
+        along. This is the scan catching up, and it brings the same promise
+        with it: a scan runs with the settings that were in force when it
+        started, not with whatever gets changed while it is running.
+        """
+        return {"proxy": self.proxy(), "cookies": self.cookies(),
+                "workers": self.workers(), "quiet": bool(self.quiet_var.get()),
+                "tor": bool(self.tor_var.get() and self.tor_addr)}
 
     def _update_checks(self, proxy):
         """Both questions about versions, asked once and out of the way."""
         update_ytdlp(self.log, proxy)
         newer_release(self.log, proxy)
 
-    def _scan_worker(self, links, token):
+    def _scan_worker(self, links, token, job):
         if isinstance(links, str):
             links = [links]
         self.log("scan " + " ".join(links))
+        proxy = job["proxy"]
         if not self.ytdlp_checked:
             # Deliberately here rather than at launch: this way it goes out the
             # same way the scan does, and only once somebody is actually
             # scanning something.
             self.ytdlp_checked = True
-            threading.Thread(target=self._update_checks, args=(self.proxy(),),
+            threading.Thread(target=self._update_checks, args=(proxy,),
                              daemon=True).start()
         found: list[Item] = []
         seen: set[tuple] = set()
@@ -4160,11 +4186,10 @@ class App:
                     self.say(self.t("scanning_n", n=number, total=len(links)),
                              C["dim"])
                 try:
-                    part = scan(url, self.proxy(), self.say,
-                                self.cookies(),
+                    part = scan(url, proxy, self.say, job["cookies"],
                                 self.t("no_video", site=urlparse(url).netloc),
-                                self.t("try_cookies"), self.workers(),
-                                bool(self.quiet_var.get()), self.t("scanning"))
+                                self.t("try_cookies"), job["workers"],
+                                job["quiet"], self.t("scanning"))
                 except Exception as exc:
                     # One bad link out of ten must not take the other nine with
                     # it: it is said, and the scan carries on.
@@ -4179,7 +4204,12 @@ class App:
                     if stamp not in seen:
                         seen.add(stamp)
                         found.append(it)
-                self.new_circuit()      # a link each, a circuit each
+                # a link each, a circuit each. tor_addr and tor_circuit are
+                # plain attributes, not Tk variables, so this much a worker may
+                # read for itself.
+                self.new_circuit()
+                if job["tor"]:
+                    proxy = with_circuit(self.tor_addr, self.tor_circuit)
 
             if token != self.scan_token:
                 self.log("scan finished after being stopped, result dropped",
@@ -4649,6 +4679,17 @@ def selftest():
     finally:
         globals()["session_for"] = keep_session_for
 
+
+    # Whatever the page fetch raises, the handler for it is "except
+    # requests.Timeout" - and the module was never imported in that scope, so
+    # every failure came back as NameError and the real reason went missing.
+    # A bad URL raises before any socket is opened, which is all this needs.
+    try:
+        scrape_page("not a url at all", None, lambda *_a, **_k: None)
+    except NameError as exc:
+        raise AssertionError(f"scrape_page cannot name its own errors :: {exc}")
+    except Exception:
+        pass        # anything else is the real failure, said properly
 
     assert kind_of("https://x.com/p/photo.WEBP") == "image"
     assert kind_of("https://x.com/page") is None

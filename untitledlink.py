@@ -1669,7 +1669,15 @@ def scan_media(url: str, proxy: str | None, log,
 # thing you asked for. If yt-dlp finds no media on one of these, say so instead
 # of quietly handing back junk images.
 MEDIA_HOSTS = ("x.com", "twitter.com", "instagram.com", "tiktok.com",
-               "facebook.com", "youtube.com", "youtu.be", "reddit.com")
+               "facebook.com", "youtube.com", "youtu.be", "reddit.com",
+               # yt-dlp has had extractors for these all along; leaving them
+               # out only meant that when one of them refused - a subscriber
+               # video, a deleted vod - the page got scraped instead and the
+               # answer came back as a handful of avatars rather than the
+               # reason.
+               "twitch.tv", "vimeo.com", "dailymotion.com", "dai.ly",
+               "soundcloud.com", "bandcamp.com", "streamable.com",
+               "bilibili.com", "odysee.com", "rumble.com")
 
 
 def is_media_host(url: str) -> bool:
@@ -4102,6 +4110,10 @@ def selftest():
     assert is_media_host("https://x.com/a/status/1")
     assert is_media_host("https://www.twitter.com/a")
     assert is_media_host("https://m.youtube.com/watch?v=x")
+    # twitch clips and vods live on two hosts, and both are the site
+    assert is_media_host("https://www.twitch.tv/videos/123456789")
+    assert is_media_host("https://clips.twitch.tv/SomeClipSlug")
+    assert is_media_host("https://vimeo.com/12345") and is_media_host("https://dai.ly/x")
     assert not is_media_host("https://en.wikipedia.org/wiki/Cat")
     assert not is_media_host("https://notx.com/a"), "suffix match must not overreach"
 

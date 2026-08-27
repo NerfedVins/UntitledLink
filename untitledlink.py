@@ -1908,6 +1908,25 @@ MEDIA_HOSTS = ("x.com", "twitter.com", "instagram.com", "tiktok.com",
 # usable rows.
 
 
+def row_stamp(it: Item) -> tuple[str, str, str | None]:
+    """What makes two rows the same row, for a scan of several links.
+
+    A file linked from two of the pages being scanned should be listed once,
+    which is what this is for. The trouble is what else shares an address:
+
+    - the page's own words come back as text, markdown and Word, all carrying
+      the page's address
+    - every resolution of one video is the same address AND the same title,
+      because the title is the video's, not the format's
+
+    So the format is part of it. Keyed on any less than this, eighteen rows of
+    one YouTube video collapse into the first one - which, sorted best first,
+    is the 2160p, and looks exactly like an app that only offers the top
+    quality.
+    """
+    return (it.url, it.name, it.fmt)
+
+
 def is_media_host(url: str) -> bool:
     host = urlparse(url).netloc.lower().removeprefix("www.").removeprefix("m.")
     return any(host == h or host.endswith("." + h) for h in MEDIA_HOSTS)
@@ -3958,7 +3977,7 @@ class App:
             threading.Thread(target=self._update_checks, args=(self.proxy(),),
                              daemon=True).start()
         found: list[Item] = []
-        seen: set[tuple[str, str]] = set()
+        seen: set[tuple] = set()
         failed = 0
         try:
             for number, url in enumerate(links, 1):
@@ -3986,11 +4005,7 @@ class App:
                         self.log(traceback.format_exc().rstrip(), "error")
                     continue
                 for it in part:
-                    # Keyed by name as well as address: the page's own words
-                    # come back as three rows - text, markdown, Word - which
-                    # all carry the page's url, and deduplicating on the url
-                    # alone kept the first and threw the other two away.
-                    stamp = (it.url, it.name)
+                    stamp = row_stamp(it)
                     if stamp not in seen:
                         seen.add(stamp)
                         found.append(it)
@@ -5049,6 +5064,19 @@ def selftest():
     assert merge_mark(True, False) == "", "progressive never needs the flag"
     assert rows[4].size == 1000 and rows[4].fmt == "a"
     assert media_variants({"formats": []}, "x", "u") == []
+
+    # A scan of several links lists a file found on two of them once. What it
+    # must not do is fold one video's resolutions together: they share the
+    # address and the title, and only the format tells them apart. Keyed on
+    # less than that, these eighteen rows became the 2160p and nothing else.
+    stamps = {row_stamp(r) for r in rows}
+    assert len(stamps) == len(rows), f"{len(rows)} rows, {len(stamps)} stamps"
+    page = [Item("https://h/page", f"page.{s}", "doc", via="text", fmt=s)
+            for s in ("txt", "md", "docx")]
+    assert len({row_stamp(r) for r in page}) == 3, "the page's three shapes"
+    twice = Item("https://h/a.jpg", "a.jpg", "image", 100)
+    assert row_stamp(twice) == row_stamp(Item("https://h/a.jpg", "a.jpg",
+                                              "image", 100)),         "the same file linked from two pages is still one row"
 
     # every source audio track gets a row, best bitrate first, and the mp3
     # re-encode sits last - it is not a better copy of any of them, it is one

@@ -2404,6 +2404,7 @@ class App:
         self.tor_addr: str | None = None      # filled in when the box goes on
         self.tor_circuit = ""                 # rotates per scan and per download
         self.route_label = None               # lives only while settings is open
+        self.settings_panel = None            # the settings, over the window
         self.tor_var.trace_add("write", lambda *_: self.apply_tor())
         self.quality_var = tk.StringVar(value=self.prefs.get("quality", "best"))
         # StringVar, not IntVar: an IntVar raises TclError the moment it holds
@@ -3528,11 +3529,25 @@ class App:
             self.log(f"could not open {target} :: {exc}", "warn")
 
     def open_settings(self):
-        win = tk.Toplevel(self.root)
-        win.title(self.t("dlg_title"))
-        win.configure(bg=C["bg"])
-        win.transient(self.root)
-        win.resizable(False, True)
+        """Settings, inside the window rather than beside it.
+
+        This was a Toplevel, which Windows is free to place wherever it likes -
+        and with thirteen settings in it, tall enough that "wherever it likes"
+        put it off the edge of the app entirely. A panel over the window
+        cannot land anywhere else, cannot be lost behind anything, and closes
+        with Escape like the dialog did.
+        """
+        if getattr(self, "settings_panel", None):
+            return                      # already open; one is enough
+        win = tk.Frame(self.root, bg=C["bg"], highlightthickness=1,
+                       highlightbackground=C["line"])
+        win.place(relx=0, rely=0, relwidth=1, relheight=1)
+        self.settings_panel = win
+
+        head_bar = tk.Frame(win, bg=C["bg"])
+        head_bar.pack(side="top", fill="x", padx=20, pady=(14, 0))
+        tk.Label(head_bar, text=self.t("dlg_title"), bg=C["bg"], fg=C["green"],
+                 font=self.fh).pack(side="left")
 
         # The dialog had grown past 860px, which puts save and cancel below the
         # bottom edge of a 768p laptop screen - a dialog you cannot agree to.
@@ -3730,11 +3745,16 @@ class App:
                    self.parallel_var, self.attempts_var)
         before = [v.get() for v in touched]
 
+        def shut():
+            self.root.unbind("<Escape>")
+            self.settings_panel = None
+            win.destroy()
+
         def cancel():
             for var, was in zip(touched, before):
                 if var.get() != was:      # private_var traces on write
                     var.set(was)
-            win.destroy()
+            shut()
 
         def apply_and_close():
             chosen = next((code for code, name in LANGUAGES.items()
@@ -3743,7 +3763,7 @@ class App:
             self.t.set(chosen)
             self.remember()
             self.refresh_hint()
-            win.destroy()
+            shut()
             if changed:
                 self.rebuild()
 
@@ -3752,20 +3772,11 @@ class App:
         self.button(foot, self.t("cancel"), cancel,
                     "dim").pack(side="right", padx=(0, 8))
 
-        win.bind("<Escape>", lambda _e: cancel())
-        # the window's own X is a cancel too, not a quiet save
-        win.protocol("WM_DELETE_WINDOW", cancel)
+        # Escape belongs to the window now, since the panel is part of it, and
+        # it has to be given back when the panel goes.
+        self.root.bind("<Escape>", lambda _e: cancel())
         win.update_idletasks()
         reflow()
-        wide = body.winfo_reqwidth() + scroll.winfo_reqwidth() + 8
-        tall = body.winfo_reqheight() + foot.winfo_reqheight() + 26
-        tall = min(tall, int(win.winfo_screenheight() * 0.82))
-        x = self.root.winfo_rootx() + (self.root.winfo_width() - wide) // 2
-        y = self.root.winfo_rooty() + 60
-        # keep it on screen even when the main window sits low
-        y = min(y, max(0, win.winfo_screenheight() - tall - 40))
-        win.geometry(f"{wide}x{tall}+{max(x, 0)}+{max(y, 0)}")
-        win.grab_set()
 
     def rebuild(self):
         """Redraw the whole window in the new language, keeping the results."""
@@ -5172,11 +5183,13 @@ def ui_selftest():
             assert ttk.Style().lookup("T.TCombobox", "fieldbackground",
                                       state) == C["panel"], state
 
-        # the settings dialog is where the unreadable dropdowns showed up, so
-        # build it for real and check what a reader would actually see
+        # the settings are a panel over the window, not a window of their own:
+        # a Toplevel this tall was being placed off the edge of the app
         app.open_settings()
-        dlg = [w for w in root.winfo_children() if isinstance(w, tk.Toplevel)]
-        assert len(dlg) == 1, dlg
+        assert app.settings_panel is not None, "the settings did not open"
+        assert not [w for w in root.winfo_children() if isinstance(w, tk.Toplevel)],             "the settings opened a window of their own again"
+        app.open_settings()          # asking twice must not stack two panels
+        dlg = [app.settings_panel]
         boxes = [w for w in walk(dlg[0]) if isinstance(w, ttk.Combobox)]
         assert len(boxes) == 3, f"language, quality and cookies expected: {boxes}"
         for box in boxes:
@@ -5184,11 +5197,11 @@ def ui_selftest():
             assert box.cget("style") == "T.TCombobox"
 
         # save and cancel are pinned outside the scrolling area, because at
-        # 860px the dialog put them under the bottom of a 768p screen
+        # 860px they used to sit under the bottom edge of a 768p screen
         dlg[0].update_idletasks()
         buttons = [w for w in walk(dlg[0]) if isinstance(w, ttk.Button)]
         assert buttons, "no buttons in the settings dialog"
-        assert dlg[0].winfo_height() <= int(dlg[0].winfo_screenheight() * 0.85),             f"dialog is {dlg[0].winfo_height()}px tall"
+        assert dlg[0].winfo_height() <= root.winfo_height() + 2,             f"the panel is {dlg[0].winfo_height()}px in a {root.winfo_height()}px window"
         for b in buttons:
             if b.cget("text") in (app.t("save"), app.t("cancel")):
                 bottom = b.winfo_rooty() + b.winfo_height()
@@ -5251,10 +5264,10 @@ def ui_selftest():
         app.quiet_var.set(not was_quiet)
         app.proxy_var.set("socks5://nope")
         next(b for b in buttons if b.cget("text") == app.t("cancel")).invoke()
+        assert app.settings_panel is None, "cancel left the panel up"
         assert app.quiet_var.get() == was_quiet, "cancel kept the tick"
         assert app.proxy_var.get() == was_proxy, "cancel kept the typed proxy"
-        assert not [w for w in root.winfo_children()
-                    if isinstance(w, tk.Toplevel)], "cancel left the dialog open"
+
 
         # tor: the box picks the route, and refuses to stay on when there is
         # nothing to route through

@@ -59,9 +59,33 @@ jobs:
           echo "tag=v$new" >> "$GITHUB_OUTPUT"
           echo "moved=yes" >> "$GITHUB_OUTPUT"
 
-      - name: Tag it, which sets the release workflow going
+      # The tag alone does not set the release going, which is the whole
+      # reason this file had never produced a binary. A push made with the
+      # default GITHUB_TOKEN does not start another workflow - GitHub refuses
+      # that on purpose, so a workflow cannot trigger itself round in a
+      # circle. So this tagged, reported "version moved: yes", and nothing
+      # ever built. v0.1.2 sat tagged and unreleased because of it.
+      #
+      # workflow_dispatch is the documented exception to that rule: it and
+      # repository_dispatch are the two events GITHUB_TOKEN may still raise.
+      # So the tag is pushed for the release to be named after, and the build
+      # is asked for explicitly rather than hoped for.
+      - name: Tag it
         run: |
           git tag "${{ steps.version.outputs.tag }}" --force
           git push origin "${{ steps.version.outputs.tag }}" --force
-          echo "### ${{ steps.version.outputs.tag }}" >> "$GITHUB_STEP_SUMMARY"
-          echo "version moved: ${{ steps.version.outputs.moved }}" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: And ask for the build, since the tag will not
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh workflow run release.yml --ref "${{ steps.version.outputs.tag }}"
+          {
+            echo "### ${{ steps.version.outputs.tag }}"
+            echo
+            echo "version moved: ${{ steps.version.outputs.moved }}"
+            echo
+            echo "The binaries are built by the **release** workflow, asked for"
+            echo "just now against this tag. This job going green means the tag"
+            echo "exists and the build was requested - not that it finished."
+          } >> "$GITHUB_STEP_SUMMARY"

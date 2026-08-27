@@ -135,11 +135,20 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # The second branch is the rebuild of a version that already
+          # has a release - the "same version, new binaries" path. It has
+          # to edit the notes as well as replace the files: PyInstaller
+          # does not build the same bytes twice, so notes left alone would
+          # go on publishing the checksums of the binaries they replaced,
+          # and a checksum that does not match is worse than none at all.
           gh release create "$GITHUB_REF_NAME" \
             --title "UntitledLink ${GITHUB_REF_NAME#v}" \
             --notes-file notes.md \
             built/windows/UntitledLink.exe \
             built/macos/UntitledLink-macos.zip \
-          || gh release upload "$GITHUB_REF_NAME" \
-            built/windows/UntitledLink.exe \
-            built/macos/UntitledLink-macos.zip --clobber
+          || {
+            gh release upload "$GITHUB_REF_NAME" \
+              built/windows/UntitledLink.exe \
+              built/macos/UntitledLink-macos.zip --clobber
+            gh release edit "$GITHUB_REF_NAME" --notes-file notes.md
+          }

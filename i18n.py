@@ -123,6 +123,16 @@ STRINGS = {
         "scanning_n": "converting link {n} of {total}...",
         "downloads": "downloads",
         "close": "close",
+        "clear_history": "clear the list",
+        "history_cleared": "download history cleared",
+        "dlg_history": "remember what was downloaded",
+        "dlg_history_hint": "Off by default. Keeps the list of downloads\n"
+                            "between sessions - when, what, how big, and\n"
+                            "which folder it went to. Never where it came\n"
+                            "from: a path finds your file again, a source\n"
+                            "address only says which sites you visited.\n"
+                            "Nothing is written while the private session\n"
+                            "is on, and the last 200 are kept.",
         "col_when": "WHEN",
         "col_where": "FOLDER",
         "open_file": "open the file",
@@ -267,6 +277,16 @@ STRINGS = {
         "scanning_n": "μετατροπή συνδέσμου {n} από {total}...",
         "downloads": "λήψεις",
         "close": "κλείσιμο",
+        "clear_history": "καθαρισμός λίστας",
+        "history_cleared": "το ιστορικό λήψεων καθαρίστηκε",
+        "dlg_history": "να θυμάται τι κατέβηκε",
+        "dlg_history_hint": "Ανενεργό εξ ορισμού. Κρατά τη λίστα λήψεων\n"
+                            "ανάμεσα στις συνεδρίες - πότε, τι, πόσο, και σε\n"
+                            "ποιον φάκελο. Ποτέ από πού: η διαδρομή βρίσκει\n"
+                            "ξανά το αρχείο σου, η διεύθυνση πηγής λέει μόνο\n"
+                            "ποια sites επισκέφθηκες.\n"
+                            "Δεν γράφεται τίποτα όσο τρέχει η ιδιωτική\n"
+                            "συνεδρία, και κρατιούνται οι τελευταίες 200.",
         "col_when": "ΩΡΑ",
         "col_where": "ΦΑΚΕΛΟΣ",
         "open_file": "άνοιγμα αρχείου",

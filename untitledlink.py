@@ -241,6 +241,11 @@ DATA_DIR = _data_dir()
 PRIVATE = False
 
 SETTINGS_FILE = os.path.join(DATA_DIR, "settings.json")
+HISTORY_FILE = os.path.join(DATA_DIR, "history.json")
+
+# How many downloads the history remembers. Enough to find last week's lecture
+# in, short of a record of everything you have ever fetched.
+HISTORY_MAX = 200
 DEFAULT_OUTDIR = os.path.join(os.path.expanduser("~"), "Downloads", APP)
 
 
@@ -262,6 +267,41 @@ def clamp_int(text, default: int, lo: int, hi: int) -> int:
         return max(lo, min(hi, int(text)))
     except (TypeError, ValueError):
         return default
+
+
+def load_history() -> list[dict]:
+    try:
+        with open(HISTORY_FILE, encoding="utf-8") as fh:
+            rows = json.load(fh)
+        return rows[-HISTORY_MAX:] if isinstance(rows, list) else []
+    except (OSError, ValueError):
+        return []
+
+
+def save_history(rows: list[dict]) -> None:
+    """Where files went, and nothing about where they came from.
+
+    A path tells you where to find what you downloaded, which is the whole
+    point of a history. A source url tells anyone reading the file which sites
+    you visited, which is the whole risk, and it is not needed to open a file
+    that is already on the disk. So the url is never written.
+    """
+    if PRIVATE:
+        return                 # the one mode that promises no such file exists
+    keep = [{k: row.get(k) for k in ("path", "name", "kind", "size", "when")}
+            for row in rows[-HISTORY_MAX:]]
+    try:
+        with open(HISTORY_FILE, "w", encoding="utf-8") as fh:
+            json.dump(keep, fh, indent=1)
+    except OSError:
+        pass
+
+
+def forget_history() -> None:
+    try:
+        os.remove(HISTORY_FILE)
+    except OSError:
+        pass
 
 
 def save_settings(data: dict) -> None:
@@ -2094,7 +2134,8 @@ class App:
         # history file is exactly what the private session promises does not
         # exist, and one list naming everything is a worse trace than the files
         # themselves.
-        self.history: list[dict] = []
+        self.history: list[dict] = (
+            load_history() if self.prefs.get("keep_history") else [])
         self.sort_by = ""                  # which column, and which way
         self.sort_reversed = False
         self.sized: set[int] = set()       # rows already measured on demand
@@ -2148,6 +2189,11 @@ class App:
         # page of forty handouts lands together under the page's own name.
         self.folders_var = tk.BooleanVar(
             value=bool(self.prefs.get("subfolders", False)))
+        # Off by default. A list of everything you downloaded is a heavier
+        # trace than the files themselves - the files you delete one at a time,
+        # the list remembers them all together.
+        self.keep_history_var = tk.BooleanVar(
+            value=bool(self.prefs.get("keep_history", False)))
         self.private_var = tk.BooleanVar(value=False)
         self.private_var.trace_add("write", lambda *_: self.apply_private())
         # Not remembered either, and for a plainer reason than private mode:
@@ -2254,6 +2300,7 @@ class App:
             "quiet_scan": bool(self.quiet_var.get()),
             "subtitles": bool(self.subs_var.get()),
             "subfolders": bool(self.folders_var.get()),
+            "keep_history": bool(self.keep_history_var.get()),
             "attempts": self.attempts(),
             "parallel": self.workers(),
         })
@@ -3219,6 +3266,8 @@ class App:
                     "dim").pack(side="left", padx=(8, 0))
         self.button(foot, self.t("close"), win.destroy,
                     "dim").pack(side="right")
+        self.button(foot, self.t("clear_history"), self.clear_history,
+                    "red").pack(side="right", padx=(0, 8))
 
         self.fill_history()
         # The tree only exists while the window does, and a download landing
@@ -3226,6 +3275,13 @@ class App:
         win.bind("<Destroy>", lambda e: setattr(self, "hist_tree", None)
                  if e.widget is win else None, add="+")
         win.bind("<Escape>", lambda _e: win.destroy())
+
+    def clear_history(self):
+        """Empty the list and the file behind it, if there is one."""
+        self.history.clear()
+        forget_history()
+        self.fill_history()
+        self.say(self.t("history_cleared"), C["green"])
 
     def fill_history(self):
         """Redraw the list, newest last, the way it happened."""
@@ -3437,6 +3493,9 @@ class App:
             if e.widget is win else None), add="+")
         sync()
 
+        self.switch(body, "dlg_history", self.keep_history_var)
+        hint(self.t("dlg_history_hint"))
+
         self.switch(body, "dlg_quiet", self.quiet_var)
         hint(self.t("dlg_quiet_hint"))
 
@@ -3465,8 +3524,8 @@ class App:
         touched = (self.outdir_var, self.proxy_var, self.quality_var,
                    self.cookies_var, self.clean_var, self.private_var,
                    self.tor_var, self.dblclick_var, self.quiet_var,
-                   self.subs_var, self.folders_var, self.parallel_var,
-                   self.attempts_var)
+                   self.subs_var, self.folders_var, self.keep_history_var,
+                   self.parallel_var, self.attempts_var)
         before = [v.get() for v in touched]
 
         def cancel():
@@ -3866,6 +3925,8 @@ class App:
                     self.set_busy(a)
                 elif kind == "saved":
                     self.history.append(a)
+                    if self.keep_history_var.get():
+                        save_history(self.history)
                     if getattr(self, "hist_tree", None):
                         self.fill_history()
                 elif kind == "rowprog":
@@ -4369,6 +4430,41 @@ def selftest():
     assert not already_here(folder, Item("https://h/w", "Lecture 4", "video",
                                          via="ytdlp"))
     assert not already_here(set(), Item("https://h/clip.mp4", "clip.mp4", "video"))
+
+    # the history remembers where files went and never where they came from
+    global HISTORY_FILE
+    keep_hist = HISTORY_FILE
+    HISTORY_FILE = os.path.join(tempfile.mkdtemp(), "history.json")
+    try:
+        rows = [{"path": "C:/dl/a.pdf", "name": "a.pdf", "kind": "doc",
+                 "size": 10, "when": "18:04", "url": "https://secret.example/x",
+                 "page": "https://secret.example/"}]
+        save_history(rows)
+        back = load_history()
+        assert back and back[0]["path"] == "C:/dl/a.pdf", back
+        assert "url" not in back[0] and "page" not in back[0],             f"the address came along for the ride :: {back[0]}"
+        assert set(back[0]) == {"path", "name", "kind", "size", "when"}, back[0]
+
+        # more than it keeps, and it keeps the newest
+        save_history([{"path": f"/f/{n}", "name": str(n), "kind": "file",
+                       "size": n, "when": ""} for n in range(HISTORY_MAX + 40)])
+        capped = load_history()
+        assert len(capped) == HISTORY_MAX, len(capped)
+        assert capped[-1]["name"] == str(HISTORY_MAX + 39), "the oldest survived"
+
+        # and the private session writes nothing at all
+        forget_history()
+        global PRIVATE
+        PRIVATE = True
+        try:
+            save_history(rows)
+            assert load_history() == [],                 "private mode wrote the history file it promises does not exist"
+        finally:
+            PRIVATE = False
+        forget_history()
+        assert load_history() == [], "a missing file must read as an empty list"
+    finally:
+        HISTORY_FILE = keep_hist
 
     # a folder per page: forty handouts from one lecture land together, and a
     # single video does not get a folder of its own unless asked

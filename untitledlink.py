@@ -3798,7 +3798,7 @@ class App:
             threading.Thread(target=self._update_checks, args=(self.proxy(),),
                              daemon=True).start()
         found: list[Item] = []
-        seen: set[str] = set()
+        seen: set[tuple[str, str]] = set()
         failed = 0
         try:
             for number, url in enumerate(links, 1):
@@ -3826,8 +3826,13 @@ class App:
                         self.log(traceback.format_exc().rstrip(), "error")
                     continue
                 for it in part:
-                    if it.url not in seen:
-                        seen.add(it.url)
+                    # Keyed by name as well as address: the page's own words
+                    # come back as three rows - text, markdown, Word - which
+                    # all carry the page's url, and deduplicating on the url
+                    # alone kept the first and threw the other two away.
+                    stamp = (it.url, it.name)
+                    if stamp not in seen:
+                        seen.add(stamp)
                         found.append(it)
                 self.new_circuit()      # a link each, a circuit each
 
@@ -5507,6 +5512,22 @@ def ui_selftest():
                                    "import time; time.sleep(30)"])
         with _CHILDREN_LOCK:
             _CHILDREN.add(parked)
+
+        # the page's own words arrive as three rows sharing one address, and a
+        # scan that deduplicates on the address alone keeps one of them
+        page_rows = [Item("https://h/page", f"page.{s}", "doc", via="text",
+                          fmt=s, text="words") for s in ("txt", "md", "docx")]
+        app.q.put(("items", page_rows, None))
+        app.pump()
+        assert len(app.rows) == 3, "two of the three formats went missing"
+        kept = {app.items[i].fmt for i in range(3)}
+        assert kept == {"txt", "md", "docx"}, kept
+        # put the fixture back: what follows counts on those two rows
+        app.tree.delete(*app.tree.get_children())
+        app.q.put(("items", [Item("https://h/a.jpg", "a.jpg", "image", 100),
+                             Item("https://h/b.mp4", "b.mp4", "video", 200)], None))
+        app.pump()
+        rows = app.tree.get_children()
 
         # the downloads list: what landed, and the way back to it. Memory
         # only, because a history file is what the private session promises

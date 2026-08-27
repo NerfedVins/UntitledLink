@@ -2072,6 +2072,11 @@ class App:
         self.cancelled: set[int] = set()   # item indices pulled mid-download
         self.rows: list[str] = []          # tree row ids, in item order
         self.failed: list[int] = []        # item indices the last batch lost
+        # What this session downloaded, and where it put it. Memory only: a
+        # history file is exactly what the private session promises does not
+        # exist, and one list naming everything is a worse trace than the files
+        # themselves.
+        self.history: list[dict] = []
         self.sort_by = ""                  # which column, and which way
         self.sort_reversed = False
         self.sized: set[int] = set()       # rows already measured on demand
@@ -2485,6 +2490,10 @@ class App:
         # opening the dialog: what is currently switched on.
         self.button(head, self.t("settings"), self.open_settings,
                     "cyan").pack(side="right", pady=(2, 0))
+        # Beside settings, because it is the other thing you go looking for
+        # after a batch: where did all that end up.
+        self.button(head, self.t("downloads"), self.open_downloads,
+                    "cyan").pack(side="right", padx=(0, 8), pady=(2, 0))
         self.settings_hint = tk.Label(head, bg=C["bg"], fg=C["dim"], font=self.f)
         self.settings_hint.pack(side="right", padx=(0, 12), pady=(5, 0))
         self.refresh_hint()
@@ -3145,6 +3154,103 @@ class App:
         box.pack(fill="x", padx=20)
         return box
 
+    def open_downloads(self):
+        """What this session downloaded, and the way back to it.
+
+        A list in the window rather than a file on disk: a history file is the
+        thing the private session promises does not exist, and one list naming
+        everything you fetched is a worse trace than the files themselves. It
+        goes when the app goes.
+        """
+        win = tk.Toplevel(self.root)
+        win.title(self.t("downloads"))
+        win.configure(bg=C["bg"])
+        win.transient(self.root)
+        win.geometry("820x420")
+
+        table = tk.Frame(win, bg=C["bg"])
+        table.pack(fill="both", expand=True, padx=16, pady=(16, 8))
+        self.hist_tree = ttk.Treeview(
+            table, columns=("when", "kind", "size", "name", "where"),
+            show="headings", style="T.Treeview", selectmode="browse")
+        for col, txt, w in (("when", self.t("col_when"), 70),
+                            ("kind", self.t("col_type"), 90),
+                            ("size", self.t("col_size"), 80),
+                            ("name", self.t("col_name"), 300),
+                            ("where", self.t("col_where"), 240)):
+            self.hist_tree.heading(col, text=txt, anchor="center")
+            self.hist_tree.column(col, width=w, anchor="center",
+                                  stretch=(col in ("name", "where")))
+        bar = ttk.Scrollbar(table, orient="vertical",
+                            command=self.hist_tree.yview,
+                            style="T.Vertical.TScrollbar")
+        self.hist_tree.configure(yscrollcommand=bar.set)
+        self.hist_tree.pack(side="left", fill="both", expand=True)
+        bar.pack(side="right", fill="y")
+        self.hist_tree.bind("<Double-1>", lambda _e: self.open_downloaded("folder"))
+
+        foot = tk.Frame(win, bg=C["bg"])
+        foot.pack(fill="x", padx=16, pady=(0, 14))
+        self.button(foot, self.t("open_file"),
+                    lambda: self.open_downloaded("file")).pack(side="left")
+        self.button(foot, self.t("open_folder"),
+                    lambda: self.open_downloaded("folder"),
+                    "cyan").pack(side="left", padx=(8, 0))
+        self.button(foot, self.t("menu_copy_link"),
+                    lambda: self.open_downloaded("copy"),
+                    "dim").pack(side="left", padx=(8, 0))
+        self.button(foot, self.t("close"), win.destroy,
+                    "dim").pack(side="right")
+
+        self.fill_history()
+        # The tree only exists while the window does, and a download landing
+        # after it closes must not try to write into a destroyed widget.
+        win.bind("<Destroy>", lambda e: setattr(self, "hist_tree", None)
+                 if e.widget is win else None, add="+")
+        win.bind("<Escape>", lambda _e: win.destroy())
+
+    def fill_history(self):
+        """Redraw the list, newest last, the way it happened."""
+        tree = getattr(self, "hist_tree", None)
+        if not tree or not tree.winfo_exists():
+            return
+        tree.delete(*tree.get_children())
+        for row in self.history:
+            tree.insert("", "end", values=(
+                row.get("when", ""), self.t("kind_" + row.get("kind", "file")),
+                human(row.get("size", 0)), os.path.basename(row.get("path", "")),
+                os.path.dirname(row.get("path", ""))))
+
+    def open_downloaded(self, what: str):
+        """Open the file, its folder, or copy its path.
+
+        The folder is what a double click does, because handing a downloaded
+        file straight to whatever the system opens it with should be something
+        you asked for on purpose.
+        """
+        tree = getattr(self, "hist_tree", None)
+        rows = tree.selection() if tree else ()
+        if not rows:
+            return
+        row = self.history[tree.index(rows[0])]
+        path = row.get("path", "")
+        if what == "copy":
+            self.root.clipboard_clear()
+            self.root.clipboard_append(path)
+            self.say(self.t("copied"), C["green"])
+            return
+        target = path if what == "file" else os.path.dirname(path)
+        if not os.path.exists(target):
+            self.say(self.t("gone_from_disk"), C["amber"])
+            return
+        try:
+            if hasattr(os, "startfile"):
+                os.startfile(target)
+            else:
+                webbrowser.open("file://" + target)
+        except OSError as exc:
+            self.log(f"could not open {target} :: {exc}", "warn")
+
     def open_settings(self):
         win = tk.Toplevel(self.root)
         win.title(self.t("dlg_title"))
@@ -3653,15 +3759,23 @@ class App:
                     try:
                         where = target_dir(outdir, it, grouped)
                         if it.via == "ytdlp":
-                            download_media(it, where, proxy, quality, clean,
-                                           progress, cookies, subs)
+                            landed = download_media(it, where, proxy, quality,
+                                                    clean, progress, cookies,
+                                                    subs)
                         else:
                             with host_slot(it.url):
-                                download_file(it, where, proxy, clean, progress,
-                                              attempt)
+                                landed = download_file(it, where, proxy, clean,
+                                                       progress, attempt)
                         with lock:
                             tally["ok"] += 1
                         self.log(f"saved :: {it.name}", "ok")
+                        # Both of them have always returned the path they wrote
+                        # to and nobody ever caught it.
+                        self.q.put(("saved", {
+                            "path": landed or os.path.join(where, it.name),
+                            "name": it.name, "kind": it.kind,
+                            "when": time.strftime("%H:%M"),
+                            "size": it.size}, None))
                         return
                     except Cancelled:
                         with lock:
@@ -3732,6 +3846,10 @@ class App:
                     self.prog.config(value=a)
                 elif kind == "busy":
                     self.set_busy(a)
+                elif kind == "saved":
+                    self.history.append(a)
+                    if getattr(self, "hist_tree", None):
+                        self.fill_history()
                 elif kind == "rowprog":
                     for index, (done, rate) in a.items():
                         if index >= len(self.rows) or index >= len(self.items):
@@ -5075,6 +5193,38 @@ def ui_selftest():
                                    "import time; time.sleep(30)"])
         with _CHILDREN_LOCK:
             _CHILDREN.add(parked)
+
+        # the downloads list: what landed, and the way back to it. Memory
+        # only, because a history file is what the private session promises
+        # does not exist.
+        assert app.history == [], "a fresh session has nothing to show"
+        saved_dir = tempfile.mkdtemp()
+        saved_path = os.path.join(saved_dir, "lecture 7.pdf")
+        open(saved_path, "wb").write(b"pdf")
+        app.q.put(("saved", {"path": saved_path, "name": "lecture 7.pdf",
+                             "kind": "doc", "when": "18:20", "size": 3}, None))
+        app.pump()
+        assert len(app.history) == 1, app.history
+        app.open_downloads()
+        hist = [w for w in root.winfo_children()
+                if isinstance(w, tk.Toplevel) and w.title() == app.t("downloads")]
+        assert len(hist) == 1, "the downloads window did not open"
+        assert len(app.hist_tree.get_children()) == 1, "the saved file is not listed"
+        shown = app.hist_tree.item(app.hist_tree.get_children()[0], "values")
+        assert "lecture 7.pdf" in shown and saved_dir in shown, shown
+        # copying a path asks nothing of the disk and opens nothing
+        app.hist_tree.selection_set(app.hist_tree.get_children()[0])
+        app.open_downloaded("copy")
+        assert app.root.clipboard_get() == saved_path
+        # a file that has been moved away since says so instead of opening
+        os.remove(saved_path)
+        app.open_downloaded("file")
+        app.pump()          # say() goes through the queue like everything else
+        assert app.t("gone_from_disk")[:20] in app.status.cget("text"),             app.status.cget("text")
+        hist[0].destroy()
+        root.update()
+        assert app.hist_tree is None, "the closed window left its table behind"
+        app.history.clear()
 
         # clicking a heading sorts, clicking it again reverses, and the marks
         # ride along because they are held by row rather than by position.

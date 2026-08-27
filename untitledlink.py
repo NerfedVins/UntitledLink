@@ -1908,6 +1908,27 @@ MEDIA_HOSTS = ("x.com", "twitter.com", "instagram.com", "tiktok.com",
 # usable rows.
 
 
+def format_of(it: Item) -> str:
+    """The container this row would land in - "mp4", "mp3", "pdf".
+
+    A scraped row wears it on the end of its name. A yt-dlp row has no filename
+    yet, so it comes off the quality cell, which reads "2160p mp4", "m4a 129k"
+    or "mp3 320k" - the word that is not a number is the container. "as set"
+    is the one row that genuinely does not know: the resolution and the
+    container are both decided at download time.
+    """
+    if it.via == "ytdlp":
+        for word in it.quality.replace("*", "").split():
+            # "as set" is the unknown one, and "audio" is what the quality
+            # cell says when the site named no container - neither is a format
+            # anybody can tick.
+            if word[:1].isdigit() or word in ("as", "set", "audio"):
+                continue
+            return word.lower()
+        return ""
+    return os.path.splitext(it.name)[1].lstrip(".").lower()
+
+
 def row_stamp(it: Item) -> tuple[str, str, str | None]:
     """What makes two rows the same row, for a scan of several links.
 
@@ -2879,14 +2900,19 @@ class App:
                  font=self.f).pack(side="left", padx=(0, 8))
         # These two are packed before the search box even though they sit to
         # the right of it: the search box expands into whatever is left over,
-        # and pack gives it everything not already claimed. Packed after, the
-        # boxes would have nothing to sit in on a narrow window.
-        self.kind_strip = tk.Frame(strip, bg=C["bg"])
-        self.kind_strip.pack(side="right")
+        # and pack gives it everything not already claimed. Packed after, they
+        # would have nothing to sit in on a narrow window.
+        self.filter_btn = self.button(strip, self.t("filters"),
+                                      self.open_filters, "dim")
+        self.filter_btn.pack(side="right", padx=(10, 0))
         self.kind_vars: dict[str, tk.BooleanVar] = {}
+        self.ext_vars: dict[str, tk.BooleanVar] = {}
+        self.kind_counts: dict[str, int] = {}
+        self.ext_counts: dict[str, int] = {}
+        self.filter_panel = None
         self.filter_count = tk.Label(strip, text="", bg=C["bg"], fg=C["dim"],
                                      font=self.f)
-        self.filter_count.pack(side="right", padx=(8, 14))
+        self.filter_count.pack(side="right", padx=(8, 4))
         self.filter_var = tk.StringVar()
         self.filter_var.trace_add("write", lambda *_: self.apply_filter())
         self.filter_box = self.entry(strip, width=24, textvariable=self.filter_var)
@@ -3097,7 +3123,7 @@ class App:
         self.marked.clear()
         self.sized.clear()
         self.filter_var.set("")
-        self.build_kind_boxes([])
+        self.note_facets([])
         self.show_source_line([])
         self.clear_thumb(self.t("preview_hint"))
         self.meta_box.config(text="")
@@ -3193,72 +3219,170 @@ class App:
         except ValueError:
             return -1
 
-    def build_kind_boxes(self, items):
-        """A box per kind of thing this scan actually found.
+    def note_facets(self, items):
+        """What this scan has in it, as two lists of things to tick.
 
-        Six fixed boxes would be four dead ones on most pages, so the list is
-        built from the results: a lecture page offers document and image and
-        nothing else. The count sits beside each one, which answers "how many
-        pdfs are in here" before the box is even touched.
+        Built from the results rather than fixed: six kinds and forty
+        extensions would be mostly dead entries on any one page. A lecture page
+        offers document and image, pdf and jpg, and nothing else.
 
-        Ticked means shown, and everything starts ticked. The other way round -
-        nothing ticked meaning everything shown - reads as a filter already
-        doing something when it is not.
+        A new scan wipes the ticks with them. They name what the last page had
+        in it, and this is not that page.
         """
-        for child in self.kind_strip.winfo_children():
-            child.destroy()
-        self.kind_vars = {}
-        counts: dict[str, int] = {}
+        self.kind_counts, self.ext_counts = {}, {}
         for it in items:
-            counts[it.kind] = counts.get(it.kind, 0) + 1
-        # TAG_COLOURS order rather than the order they turned up in, so the
-        # boxes are in the same place after a second scan of the same site.
-        for kind in TAG_COLOURS:
-            if kind not in counts:
-                continue
-            var = tk.BooleanVar(value=True)
-            var.trace_add("write", lambda *_: self.apply_filter())
-            self.kind_vars[kind] = var
-            # Coloured like the rows it governs: the box for the green ones is
-            # green, so which box hides what needs no reading.
-            tk.Checkbutton(
-                self.kind_strip, variable=var, font=self.f,
-                text=f"{self.t('kind_' + kind)} {counts[kind]}",
-                bg=C["bg"], fg=TAG_COLOURS[kind], selectcolor=C["panel"],
-                activebackground=C["bg"], activeforeground=TAG_COLOURS[kind],
-                highlightthickness=0, borderwidth=0,
-                cursor="hand2").pack(side="left", padx=(10, 0))
+            self.kind_counts[it.kind] = self.kind_counts.get(it.kind, 0) + 1
+            ext = format_of(it)
+            if ext:
+                self.ext_counts[ext] = self.ext_counts.get(ext, 0) + 1
+        # TAG_COLOURS order for the kinds, commonest first for the formats:
+        # one is a fixed set worth keeping in a fixed order, the other is
+        # whatever the page happened to have and reads best by weight.
+        kinds = [k for k in TAG_COLOURS if k in self.kind_counts]
+        exts = sorted(self.ext_counts, key=lambda e: (-self.ext_counts[e], e))
+
+        def fresh(names):
+            boxes = {}
+            for name in names:
+                var = tk.BooleanVar(value=False)
+                var.trace_add("write", lambda *_: self.apply_filter())
+                boxes[name] = var
+            return boxes
+
+        self.kind_vars, self.ext_vars = fresh(kinds), fresh(exts)
+        if self.filter_panel:
+            self.shut_filters()     # it lists the last scan; that scan is gone
+
+    def picked_facets(self) -> tuple[set[str], set[str]]:
+        """Which boxes are ticked, on each of the two lists."""
+        return ({k for k, v in self.kind_vars.items() if v.get()},
+                {e for e, v in self.ext_vars.items() if v.get()})
+
+    def shut_filters(self):
+        if self.filter_panel:
+            self.filter_panel.destroy()
+            self.filter_panel = None
+            self.root.unbind("<Escape>")
+
+    def open_filters(self):
+        """The two lists of boxes, as a card over the window.
+
+        In the strip they were a row of checkboxes that grew with the page:
+        eight formats on a lecture page left no room for the search box beside
+        them. A card holds as many as the page has, in two labelled groups, and
+        goes away again.
+
+        Nothing ticked means everything shown - the list is not narrowed until
+        you say so - and ticking mp4 shows the mp4s. Ticking is choosing what
+        to see rather than choosing what to hide, which is the way round that
+        makes "only the mp4s" one click instead of seven.
+        """
+        if self.settings_panel:
+            return              # one card at a time; Escape belongs to one
+        if self.filter_panel:
+            self.shut_filters()  # the button toggles it
+            return
+        if not self.kind_vars and not self.ext_vars:
+            self.say(self.t("nothing_to_filter"), C["amber"])
+            return
+        win = tk.Frame(self.root, bg=C["bg"], highlightthickness=2,
+                       highlightbackground=C["line"])
+        win.place(relx=0.5, rely=0.5, anchor="center",
+                  relwidth=0.46, relheight=0.56)
+        self.filter_panel = win
+
+        tk.Label(win, text=self.t("filters").upper(), bg=C["bg"],
+                 fg=C["green"], font=self.fh, anchor="w").pack(
+                     fill="x", padx=20, pady=(14, 0))
+        tk.Label(win, text=self.t("filters_hint"), bg=C["bg"], fg=C["dim"],
+                 font=self.f, anchor="w", justify="left").pack(
+                     fill="x", padx=20, pady=(2, 0))
+
+        foot = tk.Frame(win, bg=C["bg"])
+        foot.pack(side="bottom", fill="x", padx=20, pady=(10, 14))
+        self.button(foot, self.t("close"), self.shut_filters,
+                    "green").pack(side="right")
+
+        def clear_all():
+            for var in list(self.kind_vars.values()) + list(self.ext_vars.values()):
+                var.set(False)
+
+        self.button(foot, self.t("clear"), clear_all,
+                    "dim").pack(side="right", padx=(0, 8))
+
+        # ponytail: a plain grid, three across. A page with more formats than
+        # fits gets a taller card, not a scrollbar - twenty extensions on one
+        # page has not happened. Wrap it in the settings' canvas if it does.
+        def group(title, boxes, counts, label, colour):
+            tk.Frame(win, bg=C["line"], height=1).pack(
+                fill="x", padx=20, pady=(16, 0))
+            tk.Label(win, text=title.upper(), bg=C["bg"], fg=C["cyan"],
+                     font=self.fb, anchor="w").pack(fill="x", padx=20,
+                                                    pady=(8, 4))
+            grid = tk.Frame(win, bg=C["bg"])
+            grid.pack(fill="x", padx=20)
+            for column in range(3):
+                grid.columnconfigure(column, weight=1, uniform="facet")
+            for n, (name, var) in enumerate(boxes.items()):
+                paint = colour(name)
+                tk.Checkbutton(
+                    grid, variable=var, font=self.f, anchor="w",
+                    text=f"{label(name)}  {counts[name]}",
+                    bg=C["bg"], fg=paint, selectcolor=C["panel"],
+                    activebackground=C["bg"], activeforeground=paint,
+                    highlightthickness=0, borderwidth=0, cursor="hand2"
+                ).grid(row=n // 3, column=n % 3, sticky="w", pady=1)
+
+        # The kinds are coloured like the rows they govern, so which box hides
+        # what needs no reading. An extension is not a colour anybody knows.
+        if self.kind_vars:
+            group(self.t("sec_kind"), self.kind_vars, self.kind_counts,
+                  lambda k: self.t("kind_" + k), lambda k: TAG_COLOURS[k])
+        if self.ext_vars:
+            group(self.t("sec_format"), self.ext_vars, self.ext_counts,
+                  str, lambda _e: C["fg"])
+
+        self.root.bind("<Escape>", lambda _e: self.shut_filters())
 
     def apply_filter(self, *_a):
         """Show the rows that match, and keep the rest.
 
-        Two conditions, and a row has to pass both: the typed text against
-        everything the row says, and its kind against the boxes. No boxes at
-        all - nothing scanned yet - is not a filter that hides everything.
+        Three conditions and a row has to pass all of them: the typed text
+        against everything the row says, its kind against the kind boxes, and
+        its container against the format boxes. An empty list of ticks is not
+        a filter that hides everything - it is a filter nobody has set.
 
         detach() rather than delete(): a detached row keeps its identity, so
         the marks - which are held by row id - survive being hidden. Narrowing
         the list is a way of looking, not a way of losing your ticks.
         """
         want = self.filter_var.get().strip().lower()
-        kinds = {k for k, v in self.kind_vars.items() if v.get()}
-        hiding = bool(self.kind_vars) and len(kinds) != len(self.kind_vars)
+        kinds, exts = self.picked_facets()
         shown = 0
         for index, row in enumerate(self.rows):
             it = self.items[index] if index < len(self.items) else None
             hay = " ".join(str(b).lower() for b in
                            (it.name, it.kind, it.info, it.quality, it.url)
                            if b) if it else ""
-            typed_ok = not want or want in hay
-            kind_ok = not self.kind_vars or (it is not None and it.kind in kinds)
-            if typed_ok and kind_ok:
+            ok = (it is not None
+                  and (not want or want in hay)
+                  and (not kinds or it.kind in kinds)
+                  and (not exts or format_of(it) in exts))
+            if ok:
                 self.tree.move(row, "", shown)
                 shown += 1
             else:
                 self.tree.detach(row)
+        narrowed = bool(want or kinds or exts)
         self.filter_count.config(
-            text="" if not want and not hiding
-            else self.t("filter_count", n=shown, total=len(self.rows)))
+            text=self.t("filter_count", n=shown, total=len(self.rows))
+            if narrowed else "")
+        if getattr(self, "filter_btn", None):
+            # The card is shut most of the time, so the button is where a
+            # filter that is on has to be visible from.
+            ticks = len(kinds) + len(exts)
+            self.filter_btn.config(text=self.t("filters")
+                                   + (f"  {ticks}" if ticks else ""))
         return shown
 
     def toggle_mark(self, row, force=None):
@@ -3636,6 +3760,7 @@ class App:
         """
         if getattr(self, "settings_panel", None):
             return                      # already open; one is enough
+        self.shut_filters()             # one card at a time: Escape is one key
         win = tk.Frame(self.root, bg=C["bg"], highlightthickness=2,
                        highlightbackground=C["line"])
         # Fractions, not pixels: the smallest this window goes is 940x540 and
@@ -3955,7 +4080,7 @@ class App:
         # look like a scan that found nothing. The boxes go too: they name what
         # the last page had in it, and this one is not that page.
         self.filter_var.set("")
-        self.build_kind_boxes([])
+        self.note_facets([])
         self.stop_btn.pack(side="left", padx=(6, 0))
         threading.Thread(target=self._scan_worker, args=(links, self.scan_token),
                          daemon=True).start()
@@ -4338,7 +4463,7 @@ class App:
                                                  size_cell(it, False),
                                                  self.info_cell(it, here),
                                                  it.name)))
-                    self.build_kind_boxes(a)
+                    self.note_facets(a)
                     self.apply_filter()
                     self.show_source_line(a)
         except queue.Empty:
@@ -5065,6 +5190,19 @@ def selftest():
     assert rows[4].size == 1000 and rows[4].fmt == "a"
     assert media_variants({"formats": []}, "x", "u") == []
 
+    # the format boxes are built off this: a scraped row wears its container
+    # on the end of its name, a yt-dlp row only in the quality cell
+    assert format_of(rows[0]) == "", rows[0].quality   # "2160p", no container
+    assert format_of(rows[4]) == "", rows[4].quality   # "audio 128k", ditto
+    assert format_of(rows[5]) == "mp3", rows[5].quality       # "mp3 320k"
+    assert format_of(tall[0]) == "mp4" and format_of(tall[2]) == "m4a",         [tall[0].quality, tall[2].quality]
+    assert format_of(Item("https://h/a.PDF", "Notes.PDF", "doc")) == "pdf"
+    assert format_of(Item("https://h/get", "get", "file")) == ""
+    assert format_of(Item("https://h/v", "clip", "video", via="ytdlp",
+                          quality="as set")) == "", "nothing to promise yet"
+    assert format_of(Item("https://h/v", "clip", "video", via="ytdlp",
+                          quality="1080p mp4*")) == "mp4", "the star is not it"
+
     # A scan of several links lists a file found on two of them once. What it
     # must not do is fold one video's resolutions together: they share the
     # address and the title, and only the format tells them apart. Keyed on
@@ -5664,30 +5802,56 @@ def ui_selftest():
         assert len(app.tree.get_children()) == 2, "clearing the box brings them back"
         assert list(app.tree.get_children()) == list(rows), "and in the same order"
 
-        # a box per kind the scan found, and only those: the other four kinds
-        # are not in these two rows and must not be offered
+        # the facets: what this scan has in it, on two lists. Two rows, two
+        # kinds, two formats - and nothing ticked, because nothing is narrowed
+        # until somebody says so
         assert list(app.kind_vars) == ["video", "image"], list(app.kind_vars)
-        labels = [w.cget("text") for w in app.kind_strip.winfo_children()]
-        assert labels == [f"{app.t('kind_video')} 1", f"{app.t('kind_image')} 1"], labels
-        assert all(v.get() for v in app.kind_vars.values()), "boxes start on"
+        assert set(app.ext_vars) == {"jpg", "mp4"}, list(app.ext_vars)
+        assert not any(v.get() for v in app.kind_vars.values()), "ticked itself"
+        assert app.picked_facets() == (set(), set())
+        assert len(app.tree.get_children()) == 2, "no ticks must hide nothing"
+        assert app.filter_count.cget("text") == "", "nothing narrowed to count"
 
-        # unticking one hides that kind and says so, and the tick on a hidden
-        # row survives it the same way typing does
+        # ticking mp4 shows the mp4s, in one click rather than by unticking
+        # everything else, and a hidden row keeps its download tick
         app.toggle_mark(rows[0], force=True)
-        app.kind_vars["image"].set(False)
-        assert len(app.tree.get_children()) == 1, "the image should be hidden"
-        assert rows[0] in app.marked, "hiding a row by kind lost its tick"
+        app.ext_vars["mp4"].set(True)
+        assert len(app.tree.get_children()) == 1, "only the mp4 should be left"
+        assert rows[0] in app.marked, "hiding a row by format lost its tick"
         assert app.filter_count.cget("text") == app.t("filter_count", n=1, total=2)
+        assert app.filter_btn.cget("text").endswith("1"), app.filter_btn.cget("text")
 
-        # both halves at once, and a row has to pass both
+        # the three narrowings stack, and a row has to pass all of them
         app.kind_vars["image"].set(True)
-        app.kind_vars["video"].set(False)
-        app.filter_var.set("mp4")
-        assert not app.tree.get_children(),             "the only mp4 is a video, and video is unticked"
+        assert len(app.tree.get_children()) == 0,             "an image that is also an mp4 does not exist"
+        app.kind_vars["image"].set(False)
+        app.filter_var.set("a.jpg")
+        assert not app.tree.get_children(), "the jpg is not the mp4"
         app.filter_var.set("")
-        app.kind_vars["video"].set(True)
-        assert len(app.tree.get_children()) == 2, "everything ticked hides nothing"
-        assert app.filter_count.cget("text") == "", "nothing hidden, nothing to count"
+        app.ext_vars["mp4"].set(False)
+        assert len(app.tree.get_children()) == 2, "clearing it brings them back"
+        assert app.filter_btn.cget("text") == app.t("filters"), "count left on"
+
+        # the card itself: opens, toggles shut, and never stacks two
+        app.open_filters()
+        assert app.filter_panel is not None, "the filter card did not open"
+        boxes = [w for w in walk(app.filter_panel)
+                 if isinstance(w, tk.Checkbutton)]
+        assert len(boxes) == 4, f"two kinds and two formats: {len(boxes)}"
+        app.open_filters()               # the button toggles
+        assert app.filter_panel is None, "asking twice left it up"
+        app.open_filters()
+        app.filter_panel.update_idletasks()
+        assert app.filter_panel.winfo_width() < root.winfo_width(),             "the filter card fills the window"
+        # a scan wipes the facets, and takes the card with them: they name
+        # what the last page had in it
+        app.note_facets([])
+        assert app.filter_panel is None and not app.ext_vars
+        app.q.put(("items", [Item("https://h/a.jpg", "a.jpg", "image", 100),
+                             Item("https://h/b.mp4", "b.mp4", "video", 200)], None))
+        app.pump()
+        rows = app.tree.get_children()
+        app.toggle_mark(rows[0], force=True)
         app.toggle_mark(rows[0], force=False)
         app.toggle_mark(rows[0])
         assert app.tree.item(rows[0], "image") != off, "ticking changed nothing"

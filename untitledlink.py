@@ -3107,7 +3107,10 @@ class App:
             self.q.put(("hide_stop", None, None))
             return
         self.cancelled.update(range(len(self.items)))
-        for row in self.tree.get_children():
+        # Everything queued was cancelled, so everything queued says so - a
+        # hidden row still wearing its tick reads as still coming the moment
+        # the list is widened again.
+        for row in self.rows:
             self.tree.item(row, image=self.boxes["cut"])
         self.log("stop :: cancelling everything still queued", "warn")
         self.say(self.t("stopping"), C["amber"])
@@ -3536,9 +3539,8 @@ class App:
         for i, it in enumerate(self.items):
             if it.thumb == thumb_url and it.kind == "image" and not it.res:
                 it.res = dims
-                rows = self.tree.get_children()
-                if i < len(rows):
-                    self.tree.set(rows[i], "res", dims)
+                if i < len(self.rows):
+                    self.tree.set(self.rows[i], "res", dims)
 
     def clear_thumb(self, text=""):
         """No picture: a line of explanation where the picture would be."""
@@ -4018,7 +4020,9 @@ class App:
             # leaves another loop running, and close() only cancels the last.
             self.root.after_cancel(self.tick)
             self.pump()
-            for i, row in enumerate(self.tree.get_children()):
+            # by index, not by position: they were captured as item indices,
+            # and a position only equals one while nothing is hidden
+            for i, row in enumerate(self.rows):
                 if i in marked:
                     self.toggle_mark(row, force=True)
 
@@ -4176,13 +4180,27 @@ class App:
         self.failed = []
         self.do_download()
 
+    def queued_rows(self) -> list:
+        """Which rows a download would take.
+
+        self.rows, not the tree: the tree holds only what is on screen, so a
+        row ticked before the list was narrowed was dropped here - and since
+        dropping it left this empty, the fallback then queued whatever happened
+        to be visible and unticked instead. You got a file you had not asked
+        for and not the one you had. Ticked is ticked, hidden or not.
+
+        Nothing ticked at all still means "everything I can see", which is what
+        makes narrowing to the mp4s and pressing download work.
+        """
+        visible = set(self.tree.get_children())
+        return ([r for r in self.rows if r in self.marked]
+                or [r for r in self.rows if r in visible])
+
     def do_download(self):
         if self.busy:
             return
-        rows = ([r for r in self.tree.get_children() if r in self.marked]
-                or self.tree.get_children())
         picks = [(i, self.items[i]) for i in
-                 (self.index_of(r) for r in rows) if i >= 0]
+                 (self.index_of(r) for r in self.queued_rows()) if i >= 0]
         self.cancelled.clear()
         if not picks:
             self.say(self.t("nothing_to_dl"), C["amber"])
@@ -4418,7 +4436,13 @@ class App:
                         self.route_label.config(text=a)
                 elif kind == "size":
                     index, size, token, offered = a
-                    rows = self.tree.get_children()
+                    # self.rows: a narrowed list detaches rows, so a position
+                    # in the tree stops meaning an index in the items. Keyed on
+                    # the tree, a HEAD for the third item wrote its size into
+                    # whichever row happened to be third on screen - and was
+                    # dropped outright once fewer rows were showing than the
+                    # index it answered for.
+                    rows = self.rows
                     if token == self.scan_token and index < len(rows):
                         if "html" in (b or ""):
                             # the discreet scan cannot drop these while it
@@ -5831,6 +5855,42 @@ def ui_selftest():
         app.ext_vars["mp4"].set(False)
         assert len(app.tree.get_children()) == 2, "clearing it brings them back"
         assert app.filter_btn.cget("text") == app.t("filters"), "count left on"
+
+        # a row ticked before the list was narrowed is still going to be
+        # downloaded. It used to be dropped - and dropping it emptied the
+        # list, so the fallback queued the visible unticked row instead
+        app.toggle_mark(rows[0], force=True)          # tick the jpg
+        app.ext_vars["mp4"].set(True)                 # then hide it
+        assert rows[0] not in app.tree.get_children(), "the jpg is still showing"
+        assert app.queued_rows() == [rows[0]],             [app.tree.set(r, "name") for r in app.queued_rows()]
+        app.toggle_mark(rows[0], force=False)
+        # nothing ticked is still "everything I can see", which is what makes
+        # narrowing to one format and pressing download work
+        assert app.queued_rows() == [rows[1]],             [app.tree.set(r, "name") for r in app.queued_rows()]
+
+        # a size arriving for a hidden row must land on that row. Keyed on the
+        # tree it went to whichever row was in that position on screen, and was
+        # dropped outright once fewer rows showed than the index it answered for
+        app.q.put(("size", (0, 999_000, app.scan_token, ""), ""))
+        app.pump()
+        assert app.tree.set(rows[0], "size") == human(999_000),             app.tree.set(rows[0], "size")
+        assert app.tree.set(rows[1], "size") != human(999_000),             "the jpg's size landed on the mp4"
+        app.ext_vars["mp4"].set(False)
+
+        # stop says so on every queued row, not only the ones on screen: a
+        # hidden row still wearing its tick reads as still coming
+        app.ext_vars["mp4"].set(True)
+        app.busy, app.scanning = True, False
+        app.stop_all()
+        cut = str(app.boxes["cut"])
+        assert [str(app.tree.item(r, "image")[0]) for r in app.rows] == [cut, cut],             [app.tree.item(r, "image") for r in app.rows]
+        app.busy = False
+        app.cancelled.clear()
+        app.ext_vars["mp4"].set(False)
+        app.q.put(("items", [Item("https://h/a.jpg", "a.jpg", "image", 100),
+                             Item("https://h/b.mp4", "b.mp4", "video", 200)], None))
+        app.pump()
+        rows = app.tree.get_children()
 
         # the card itself: opens, toggles shut, and never stacks two
         app.open_filters()

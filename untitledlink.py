@@ -804,7 +804,14 @@ def split_links(text: str) -> list[str]:
     link is left out rather than guessed at.
     """
     out = []
-    for word in (text or "").split():
+    # A scheme in the middle of a word is a second link, not part of the
+    # first: pasting twice, or a site's own copy button, produces
+    # "https://a/xhttps://a/x", which is a 404 rather than the page it names.
+    # ...but not when the second one is a parameter of the first: a redirect
+    # like ?next=https://b is one link, and cutting it there breaks it.
+    words = [piece for word in (text or "").split()
+             for piece in re.split(r"(?<![=&?])(?=https?://)", word) if piece]
+    for word in words:
         word = word.strip().rstrip(",;")
         if not word:
             continue
@@ -4666,6 +4673,12 @@ def selftest():
     assert split_links("  ") == [] and split_links(None) == []
     assert split_links("hello there") == [], "words are not links"
     assert split_links("look at https://a.gr/x please") == ["https://a.gr/x"],         "a link inside a sentence still counts"
+    # the same link pasted twice with nothing between them
+    doubled = "https://a.gr/news/1https://a.gr/news/1"
+    assert split_links(doubled) == ["https://a.gr/news/1"], split_links(doubled)
+    assert split_links("https://a.gr/1https://b.gr/2") ==         ["https://a.gr/1", "https://b.gr/2"], "two different ones, run together"
+    kept = split_links("https://a.gr/go?next=https://b.gr/x")
+    assert kept == ["https://a.gr/go?next=https://b.gr/x"], kept
     assert len(split_links(" ".join(f"https://a.gr/{n}" for n in range(60)))) ==         MAX_LINKS, "a pasted wall of text is a mistake, not a plan"
 
     # the proxy box: a bare host:port is a socks proxy, junk is nothing, and

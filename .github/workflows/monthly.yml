@@ -23,8 +23,12 @@ on:
         default: patch
         options: [patch, none]
 
+# contents to commit the version and push the tag; actions to ask release.yml
+# for a build. Naming any permission here drops every one not named to none,
+# so leaving actions out is what makes the dispatch below answer 403.
 permissions:
   contents: write
+  actions: write
 
 jobs:
   bump:

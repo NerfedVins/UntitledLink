@@ -16,3 +16,7 @@ pillow>=10.0
 # there is no pinned digest here to go stale. Needed for 1080p and above (those
 # ship video and audio separately and have to be merged) and for mp3.
 imageio-ffmpeg>=0.5
+
+# The Word row on a scanned page. Writes a real .docx without Word
+# being installed, and handles Greek without any font wrangling.
+python-docx>=1.1

@@ -743,7 +743,7 @@ def size_cell(it: Item, measured: bool) -> str:
     is opened, and a column of dashes said "this file has no size" when it
     meant "click it and I will go and find out".
     """
-    if it.size or measured or it.via == "ytdlp":
+    if it.size or measured or it.via in ("ytdlp", "text"):
         return human(it.size)
     return "·"
 
@@ -1231,6 +1231,49 @@ def embed_urls(soup, base: str) -> list[str]:
     return out
 
 
+def plain_text(marked: str) -> str:
+    """The same page without markdown's markers, for the .txt row.
+
+    Two rows that differ only by extension would be a joke: this is the one
+    for reading and printing, the marked-up one is for anything that renders
+    it.
+    """
+    out = []
+    for line in marked.splitlines():
+        if line.startswith("#"):
+            out.append(line.lstrip("#").strip())
+        elif line.startswith("> "):
+            out.append(line[2:])
+        else:
+            out.append(line)
+    return "\n".join(out)
+
+
+def write_docx(text: str, path: str) -> None:
+    """The page as a Word document, built from the shape already worked out.
+
+    Parsed back out of our own markdown rather than out of the html a second
+    time: the hard part - deciding what on the page was worth keeping - was
+    done during the scan, and this only has to lay it out.
+    """
+    from docx import Document
+    doc = Document()
+    for line in text.splitlines():
+        line = line.rstrip()
+        if not line:
+            continue
+        if line.startswith("#"):
+            level = min(len(line) - len(line.lstrip("#")), 4)
+            doc.add_heading(line.lstrip("#").strip(), level=level)
+        elif line.startswith("- "):
+            doc.add_paragraph(line[2:], style="List Bullet")
+        elif line.startswith("> "):
+            doc.add_paragraph(line[2:], style="Intense Quote")
+        else:
+            doc.add_paragraph(line)
+    doc.save(path)
+
+
 def readable_text(soup, title: str, url: str) -> str:
     """The page as something you can read, search and print.
 
@@ -1388,10 +1431,15 @@ def scrape_page(url: str, proxy: str | None, log, embeds: bool = True,
     if len(words.split()) >= 25:      # a menu and a login box are not a page
         # The trimmed title, the same one the folder uses: a file called
         # "Exercises 3.txt" beats "Exercises 3 _ eClass University.txt".
-        items.append(Item(url, (holder or safe_name(urlparse(url).netloc)) + ".txt",
-                          "doc", size=len(words.encode("utf-8")), via="text",
-                          page=url, folder=holder, info="page text",
-                          text=words))
+        stem = holder or safe_name(urlparse(url).netloc)
+        for suffix, what, weight in (("txt", "page text",
+                                      len(plain_text(words).encode("utf-8"))),
+                                     ("md", "page text, markdown",
+                                      len(words.encode("utf-8"))),
+                                     ("docx", "page text, Word", 0)):
+            items.append(Item(url, f"{stem}.{suffix}", "doc", size=weight,
+                              via="text", fmt=suffix, page=url, folder=holder,
+                              info=what, text=words))
 
     items.sort(key=lambda i: (i.kind, -i.size))
 
@@ -1992,11 +2040,22 @@ def resume_plan(have: int, status: int, length: int) -> tuple[str, int, int]:
 
 
 def write_text(it: Item, outdir: str) -> str:
-    """Save the page's words. No request: the text came back with the scan."""
+    """Save the page's words in the shape this row asked for.
+
+    No request of any kind: the text came back with the scan, and all three
+    rows are the same words laid out differently.
+    """
     with NAME_LOCK:
         dest = unique_path(os.path.join(outdir, safe_name(it.name)))
+    if it.fmt == "docx":
+        try:
+            write_docx(it.text, dest)
+        except ImportError:
+            raise Permanent("Word documents need python-docx :: "
+                            "pip install -r requirements.txt") from None
+    else:
         with open(dest, "w", encoding="utf-8") as fh:
-            fh.write(it.text)
+            fh.write(it.text if it.fmt == "md" else plain_text(it.text))
     return dest
 
 
@@ -4556,13 +4615,30 @@ def selftest():
     assert "Home Menu Login" not in words, "the menu is not the page"
     assert ("\n\n\n" not in words), "never more than one blank line"
 
-    # and it is written without asking the site for anything
+    # three rows, three shapes, one set of words - and none of them asks the
+    # site for anything, since the text came back with the scan
     text_dir = tempfile.mkdtemp()
-    page_row = Item("https://h/x", "Exercises 3.txt", "doc", via="text",
-                    text=words)
-    written = write_text(page_row, text_dir)
-    assert os.path.basename(written) == "Exercises 3.txt"
-    assert open(written, encoding="utf-8").read() == words
+
+    def _write(suffix):
+        row = Item("https://h/x", f"Exercises 3.{suffix}", "doc", via="text",
+                   fmt=suffix, text=words)
+        return write_text(row, text_dir)
+
+    as_md = open(_write("md"), encoding="utf-8").read()
+    assert as_md == words and as_md.startswith("# "), "markdown keeps its markers"
+    as_txt = open(_write("txt"), encoding="utf-8").read()
+    assert "Exercises 3" in as_txt and not as_txt.startswith("#"),         "the plain one drops them, or the two rows differ only by extension"
+    assert "- Give an example." in as_txt, "a bullet is plain enough to keep"
+
+    as_docx = _write("docx")
+    assert os.path.basename(as_docx) == "Exercises 3.docx"
+    with open(as_docx, "rb") as _fh:
+        assert _fh.read(2) == b"PK", "a .docx is a zip, and this one is not"
+    import zipfile as _zip
+    with _zip.ZipFile(as_docx) as _z:
+        inside = _z.read("word/document.xml").decode("utf-8")
+    assert "What is a matrix?" in inside, "the questions did not reach the file"
+    assert "Exercises 3" in inside
 
     # a folder per page: forty handouts from one lecture land together, and a
     # single video does not get a folder of its own unless asked

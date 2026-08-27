@@ -41,6 +41,7 @@ pyinstaller --noconfirm --onefile --windowed --name UntitledLink ^
     --collect-all yt_dlp ^
     --collect-all imageio_ffmpeg ^
     --collect-all certifi ^
+    --collect-all docx ^
     --hidden-import PIL._tkinter_finder ^
     --hidden-import socks ^
     --hidden-import urllib3.contrib.socks ^

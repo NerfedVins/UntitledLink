@@ -2846,20 +2846,32 @@ class App:
         self.source_line = tk.Label(left, bg=C["bg"], fg=C["fg"], font=self.fb,
                                     anchor="w")
         # A lecture page comes back with two hundred rows and no way to find
-        # the four pdfs among them. Typing here hides what does not match - it
-        # hides rather than forgets, so a row ticked before you started typing
-        # is still ticked and still downloads.
+        # the four pdfs among them. Two ways of narrowing that down, because
+        # they answer different questions: the box on the left is for a name
+        # you half remember, the boxes on the right are for "show me only the
+        # documents" - which is the more common one, and used to mean typing
+        # "pdf" and hoping every filename said so.
+        #
+        # Both hide rather than forget, so a row ticked before you started
+        # narrowing is still ticked and still downloads.
         strip = tk.Frame(left, bg=C["bg"])
         strip.pack(fill="x", pady=(0, 6))
-        tk.Label(strip, text=self.t("filter"), bg=C["bg"], fg=C["dim"],
+        tk.Label(strip, text=self.t("search"), bg=C["bg"], fg=C["dim"],
                  font=self.f).pack(side="left", padx=(0, 8))
+        # These two are packed before the search box even though they sit to
+        # the right of it: the search box expands into whatever is left over,
+        # and pack gives it everything not already claimed. Packed after, the
+        # boxes would have nothing to sit in on a narrow window.
+        self.kind_strip = tk.Frame(strip, bg=C["bg"])
+        self.kind_strip.pack(side="right")
+        self.kind_vars: dict[str, tk.BooleanVar] = {}
+        self.filter_count = tk.Label(strip, text="", bg=C["bg"], fg=C["dim"],
+                                     font=self.f)
+        self.filter_count.pack(side="right", padx=(8, 14))
         self.filter_var = tk.StringVar()
         self.filter_var.trace_add("write", lambda *_: self.apply_filter())
         self.filter_box = self.entry(strip, width=24, textvariable=self.filter_var)
         self.filter_box.pack(side="left", fill="x", expand=True, ipady=2)
-        self.filter_count = tk.Label(strip, text="", bg=C["bg"], fg=C["dim"],
-                                     font=self.f)
-        self.filter_count.pack(side="left", padx=(8, 0))
 
         self.table = tk.Frame(left, bg=C["bg"])
         self.table.pack(fill="both", expand=True)
@@ -3066,6 +3078,7 @@ class App:
         self.marked.clear()
         self.sized.clear()
         self.filter_var.set("")
+        self.build_kind_boxes([])
         self.show_source_line([])
         self.clear_thumb(self.t("preview_hint"))
         self.meta_box.config(text="")
@@ -3161,27 +3174,71 @@ class App:
         except ValueError:
             return -1
 
+    def build_kind_boxes(self, items):
+        """A box per kind of thing this scan actually found.
+
+        Six fixed boxes would be four dead ones on most pages, so the list is
+        built from the results: a lecture page offers document and image and
+        nothing else. The count sits beside each one, which answers "how many
+        pdfs are in here" before the box is even touched.
+
+        Ticked means shown, and everything starts ticked. The other way round -
+        nothing ticked meaning everything shown - reads as a filter already
+        doing something when it is not.
+        """
+        for child in self.kind_strip.winfo_children():
+            child.destroy()
+        self.kind_vars = {}
+        counts: dict[str, int] = {}
+        for it in items:
+            counts[it.kind] = counts.get(it.kind, 0) + 1
+        # TAG_COLOURS order rather than the order they turned up in, so the
+        # boxes are in the same place after a second scan of the same site.
+        for kind in TAG_COLOURS:
+            if kind not in counts:
+                continue
+            var = tk.BooleanVar(value=True)
+            var.trace_add("write", lambda *_: self.apply_filter())
+            self.kind_vars[kind] = var
+            # Coloured like the rows it governs: the box for the green ones is
+            # green, so which box hides what needs no reading.
+            tk.Checkbutton(
+                self.kind_strip, variable=var, font=self.f,
+                text=f"{self.t('kind_' + kind)} {counts[kind]}",
+                bg=C["bg"], fg=TAG_COLOURS[kind], selectcolor=C["panel"],
+                activebackground=C["bg"], activeforeground=TAG_COLOURS[kind],
+                highlightthickness=0, borderwidth=0,
+                cursor="hand2").pack(side="left", padx=(10, 0))
+
     def apply_filter(self, *_a):
-        """Show the rows that match what is typed, and keep the rest.
+        """Show the rows that match, and keep the rest.
+
+        Two conditions, and a row has to pass both: the typed text against
+        everything the row says, and its kind against the boxes. No boxes at
+        all - nothing scanned yet - is not a filter that hides everything.
 
         detach() rather than delete(): a detached row keeps its identity, so
-        the marks - which are held by row id - survive being hidden. A filter
-        is a way of looking, not a way of losing your ticks.
+        the marks - which are held by row id - survive being hidden. Narrowing
+        the list is a way of looking, not a way of losing your ticks.
         """
         want = self.filter_var.get().strip().lower()
+        kinds = {k for k, v in self.kind_vars.items() if v.get()}
+        hiding = bool(self.kind_vars) and len(kinds) != len(self.kind_vars)
         shown = 0
         for index, row in enumerate(self.rows):
             it = self.items[index] if index < len(self.items) else None
             hay = " ".join(str(b).lower() for b in
                            (it.name, it.kind, it.info, it.quality, it.url)
                            if b) if it else ""
-            if not want or want in hay:
+            typed_ok = not want or want in hay
+            kind_ok = not self.kind_vars or (it is not None and it.kind in kinds)
+            if typed_ok and kind_ok:
                 self.tree.move(row, "", shown)
                 shown += 1
             else:
                 self.tree.detach(row)
         self.filter_count.config(
-            text="" if not want
+            text="" if not want and not hiding
             else self.t("filter_count", n=shown, total=len(self.rows)))
         return shown
 
@@ -3865,9 +3922,11 @@ class App:
         self.rows = []
         self.marked.clear()
         self.sized.clear()
-        # A filter left over from the last scan would hide the new results and
-        # look like a scan that found nothing.
+        # Anything left over from the last scan would hide the new results and
+        # look like a scan that found nothing. The boxes go too: they name what
+        # the last page had in it, and this one is not that page.
         self.filter_var.set("")
+        self.build_kind_boxes([])
         self.stop_btn.pack(side="left", padx=(6, 0))
         threading.Thread(target=self._scan_worker, args=(links, self.scan_token),
                          daemon=True).start()
@@ -4254,6 +4313,7 @@ class App:
                                                  size_cell(it, False),
                                                  self.info_cell(it, here),
                                                  it.name)))
+                    self.build_kind_boxes(a)
                     self.apply_filter()
                     self.show_source_line(a)
         except queue.Empty:
@@ -5562,6 +5622,31 @@ def ui_selftest():
         app.filter_var.set("")
         assert len(app.tree.get_children()) == 2, "clearing the box brings them back"
         assert list(app.tree.get_children()) == list(rows), "and in the same order"
+
+        # a box per kind the scan found, and only those: the other four kinds
+        # are not in these two rows and must not be offered
+        assert list(app.kind_vars) == ["video", "image"], list(app.kind_vars)
+        labels = [w.cget("text") for w in app.kind_strip.winfo_children()]
+        assert labels == [f"{app.t('kind_video')} 1", f"{app.t('kind_image')} 1"], labels
+        assert all(v.get() for v in app.kind_vars.values()), "boxes start on"
+
+        # unticking one hides that kind and says so, and the tick on a hidden
+        # row survives it the same way typing does
+        app.toggle_mark(rows[0], force=True)
+        app.kind_vars["image"].set(False)
+        assert len(app.tree.get_children()) == 1, "the image should be hidden"
+        assert rows[0] in app.marked, "hiding a row by kind lost its tick"
+        assert app.filter_count.cget("text") == app.t("filter_count", n=1, total=2)
+
+        # both halves at once, and a row has to pass both
+        app.kind_vars["image"].set(True)
+        app.kind_vars["video"].set(False)
+        app.filter_var.set("mp4")
+        assert not app.tree.get_children(),             "the only mp4 is a video, and video is unticked"
+        app.filter_var.set("")
+        app.kind_vars["video"].set(True)
+        assert len(app.tree.get_children()) == 2, "everything ticked hides nothing"
+        assert app.filter_count.cget("text") == "", "nothing hidden, nothing to count"
         app.toggle_mark(rows[0], force=False)
         app.toggle_mark(rows[0])
         assert app.tree.item(rows[0], "image") != off, "ticking changed nothing"

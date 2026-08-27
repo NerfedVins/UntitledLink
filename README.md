@@ -70,8 +70,14 @@ ffmpeg - is tracked and killed when the window closes, whether it closes
 normally or on the way out of a crash. Closing the window ends the session:
 one process while it runs, none after.
 
-Because `pythonw` has no console to print to, a crash before the window appears
-writes `crash.log` next to the app and shows the error in a dialog.
+Because `pythonw` has no console to print to, **nothing that goes wrong is
+allowed to go nowhere.** A crash before the window appears writes `crash.log`
+next to the app and shows the error in a dialog. Anything that raises after
+that - a button, a key, the queue the background threads talk through - says so
+on the status line, writes its traceback to the log panel, which opens itself
+on an error, and leaves the same `crash.log`. Not a dialog for that half: most
+of them are one row failing to draw, and a modal for that is worse than the
+fault. A private session writes no file either way.
 
 ### Standalone exe
 
@@ -143,22 +149,75 @@ empty - no encoder signature, no source URL.
 
 ## Marking, preview, log
 
-**Click a row to mark it**, or move to it with the arrow keys and press Space.
-Marked rows show `[x]` and the status line keeps a running total - `3 marked :: 412.6M total` - so you can queue two videos and ten
-photos in one go and see what it costs before starting. Download takes the marked
-rows; with nothing marked it takes everything. Ctrl+A marks all, Ctrl+A again
-clears.
+**Click the box on a row to mark it**, or move to it with the arrow keys and
+press Space. Everything outside the box just shows the row - looking is the
+more common thing to want, and marking wherever you clicked meant there was no
+way to look at a row without queueing it.
+
+Marked rows carry a ticked box and the status line keeps a running total -
+`3 marked :: 412.6M total` - so you can queue two videos and ten photos in one
+go and see what it costs before starting. Download takes the marked rows; with
+nothing marked it takes everything **you can see**, which is what makes
+narrowing the list to the mp4s and pressing download work. A row you marked
+before narrowing is still marked and still downloads, whether it is on screen
+or not. Ctrl+A marks all, Ctrl+A again clears.
 
 The **preview pane** on the right shows the selected item: the image itself for
 scraped pictures, the site's own thumbnail for videos, plus type, size and source
 URL. Thumbnails load in the background and are cached, and the fetch is capped so
 previewing never pulls a 40 MB original.
 
+It waits 150ms for the selection to settle first. Every row an arrow key passes
+over is a selection, and each one used to start a size request and a thumbnail
+fetch that the next row immediately made pointless - two hundred of each for one
+held-down key, and over tor slow and loud as well as wasted.
+
 The **log panel** records every scan and download - what was tried, what was
 saved, and why anything failed, with a full traceback for unexpected errors. It
 **opens by itself on any failure**, so a summary line like `0 saved, 1 failed`
 never leaves you guessing. `log` toggles it, `copy log` puts the whole thing on
 the clipboard. It lives in memory only and is not written to disk.
+
+## Search and filters
+
+A lecture page comes back with two hundred rows and four pdfs in it. Two ways
+of getting to them, because they answer different questions.
+
+**The bar above the list is a search.** Type and it hides what does not match,
+against everything a row says - name, kind, format, the address itself. This is
+for a name you half remember.
+
+**The `filters` button opens a card** with a box per thing the scan actually
+found, in two groups:
+
+```
+KIND      video 8   audio 10
+FORMAT    webm 10   mp4 5   m4a 2   mp3 1
+```
+
+Built from the results, not fixed: six kinds and forty extensions would be
+mostly dead entries on any one page. The count sits beside each, which answers
+"how many pdfs are in here" before you tick anything. The kinds keep the colour
+of the rows they govern.
+
+**Ticking is choosing what to see, not what to hide.** Nothing ticked shows
+everything - the list is not narrowed until you say so - and ticking `mp4` is
+one click rather than unticking the other seven. The button carries the number
+of ticks while the card is shut, since that is the only thing on screen saying
+a filter is on.
+
+The three stack: text, kind, format, and a row has to pass all three. A new
+scan clears them, because the boxes name what the last page had in it.
+
+A format box is possible at all because of where the container is written. A
+scraped row wears it on the end of its name; a yt-dlp row has no filename yet -
+its name is the video's title - so it comes off the quality cell: `2160p mp4`,
+`m4a 129k`, `mp3 320k`. Two rows genuinely do not know one, and neither becomes
+a box: `as set`, where the resolution and the container are both decided at
+download time, and a bare `audio` for a site that named no container.
+
+**Hiding is not forgetting.** Rows are detached, not deleted, so a row keeps
+its identity, its mark, and its place in the list while it is out of sight.
 
 ## Keyboard
 
@@ -315,12 +374,30 @@ was ticked a week ago is a scan that fails for a reason nobody remembers.
 Delete the file to reset. If the folder is read-only, the app runs fine and
 just does not remember.
 
-## The settings dialog
+## The settings
 
-The `settings` button opens the dialog: **language**, **quality**,
-**download folder**, proxy, browser cookies, strip-metadata, and tries per file.
-It also shows where ffmpeg was found. A short line beside the button says what is
-currently on - `proxy  cookies:firefox  strip` - so nothing is silently active.
+The `settings` button opens a card **over the window**, not a window of its
+own. It used to be a Toplevel, and Windows places one of those wherever it
+likes - with thirteen settings in it, tall enough that "wherever it likes"
+meant off the edge of the app. A card cannot land anywhere else and cannot be
+lost behind anything. It is a card rather than a full-window panel because
+filling the window is a Toplevel again in everything but name: nothing left on
+screen to say what you were in the middle of. Escape closes it, the body
+scrolls when it has to, and save and cancel are pinned outside the scrolling
+area so they are reachable on a 768p screen.
+
+Thirteen settings in one column read as a list to get through, so they sit in
+three groups, by the question they answer:
+
+- **downloading** - download folder, quality, subtitles, a folder per page,
+  parallel downloads, tries per file, and where ffmpeg was found
+- **privacy** - tor, private session, proxy, browser cookies, keeping a
+  downloads list, the discreet scan, and stripping metadata
+- **the window** - language, and whether a double click downloads
+
+Cancel puts back everything you touched, not just the file: every control
+writes straight into the value the app is using, so a tick you took back would
+otherwise stay on for the rest of the session.
 
 Everything is written to `settings.json` next to the app and reloaded on start,
 so your download folder is the one you picked last time.
@@ -440,15 +517,17 @@ python untitledlink.py --selftest
 ```
 
 Checks the metadata strippers, the thumbnail-upgrade rules, the resolution table
-logic, the resume arithmetic, and the settings round-trip. Offline, under a second.
+logic, the resume arithmetic, the scan's rules for what counts as the same row,
+and the settings round-trip - then builds the real window and drives it: the
+filters, the marks, the queue pump, the settings card. Offline, under a second.
 
 By hand, one link per path:
 
 | Paste this | Expect |
 |---|---|
-| `https://www.youtube.com/watch?v=aqz-KE-bpKQ` | 9 rows, 2160p at ~1.3G down to audio at ~9.8M |
+| `https://www.youtube.com/watch?v=aqz-KE-bpKQ` | 16 rows, 2160p at ~1.3G down to audio at ~3.7M |
 | `https://en.wikipedia.org/wiki/Cat` | ~199 rows, 137 images, top one ~4.4M (the upgraded original, not the 89K thumb) |
-| any YouTube playlist | one row per video, capped at 200; the quality dropdown applies here |
+| any YouTube playlist | one row per video, capped at 200, each `as set` - the formats are not known without a request per video, so the quality **setting** decides at download time |
 | `https://x.com/SpaceX/status/1732824684683784516` | 6 rows, 1080p at ~141M, none needing ffmpeg |
 | a tweet with no video | the reason plus a pointer to cookies, not a list of scraped avatars |
 | a private or geoblocked video | the real reason on the status line, e.g. `Video unavailable` |
@@ -456,8 +535,13 @@ By hand, one link per path:
 To see resume work: start a large download, kill the app mid-transfer, reopen and
 download the same row. It continues from the `.part` file instead of starting over.
 
-Ctrl+A selects everything. Nothing selected means everything gets downloaded.
-Double-click a row downloads it.
+Ctrl+A marks everything. Nothing marked means everything **on screen** gets
+downloaded. Double-click a row downloads it, if that is switched on.
+
+To see the filters earn themselves: scan the Cat article, open `filters`, tick
+`jpg`. To see that hiding is not forgetting: mark a row, then narrow the list
+until it is out of sight, and download - the row you marked is the one that
+arrives.
 
 Downloading from sites that forbid it in their terms is on you, and the material
 is often copyrighted. yt-dlp itself is legal open source.

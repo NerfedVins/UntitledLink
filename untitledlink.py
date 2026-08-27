@@ -1677,7 +1677,17 @@ MEDIA_HOSTS = ("x.com", "twitter.com", "instagram.com", "tiktok.com",
                # reason.
                "twitch.tv", "vimeo.com", "dailymotion.com", "dai.ly",
                "soundcloud.com", "bandcamp.com", "streamable.com",
-               "bilibili.com", "odysee.com", "rumble.com")
+               "bilibili.com", "odysee.com", "rumble.com",
+               "kick.com", "vk.com", "ok.ru", "nicovideo.jp", "bitchute.com",
+               "mixcloud.com", "audiomack.com", "pinterest.com", "tumblr.com",
+               "bsky.app", "snapchat.com", "ted.com", "patreon.com",
+               "nebula.tv", "coub.com", "9gag.com")
+
+# Deliberately NOT on that list, though yt-dlp handles them: archive.org,
+# imgur and steamcommunity. Their pages really do list files, so when yt-dlp
+# comes back with nothing the page scrape is the right answer rather than a
+# wasted one - measured on archive.org, where a details page gives thirteen
+# usable rows.
 
 
 def is_media_host(url: str) -> bool:
@@ -4114,6 +4124,15 @@ def selftest():
     assert is_media_host("https://www.twitch.tv/videos/123456789")
     assert is_media_host("https://clips.twitch.tv/SomeClipSlug")
     assert is_media_host("https://vimeo.com/12345") and is_media_host("https://dai.ly/x")
+    for _host in ("https://kick.com/a/videos/1", "https://vk.com/video-1_2",
+                  "https://www.nicovideo.jp/watch/sm9", "https://bsky.app/x",
+                  "https://www.ted.com/talks/x", "https://coub.com/view/a"):
+        assert is_media_host(_host), _host
+    # and the ones left off on purpose: their pages list files, so a scrape
+    # after yt-dlp finds nothing is the right answer, not a wasted one
+    for _host in ("https://archive.org/details/x", "https://imgur.com/gallery/a",
+                  "https://steamcommunity.com/sharedfiles/filedetails/?id=1"):
+        assert not is_media_host(_host), _host
     assert not is_media_host("https://en.wikipedia.org/wiki/Cat")
     assert not is_media_host("https://notx.com/a"), "suffix match must not overreach"
 

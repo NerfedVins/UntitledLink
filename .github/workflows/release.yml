@@ -128,7 +128,16 @@ jobs:
             echo '### Checksums'
             echo
             echo '```'
-            (cd built && sha256sum */* | sed 's|.*/||')
+            # Hash first, bare filename second. The obvious sed for this -
+            # strip everything up to the last slash - is greedy and eats the
+            # hash along with the directory, which is why every release so
+            # far has published a checksum block of two filenames and no
+            # checksums. basename cannot make that mistake, and taking the
+            # first field works whether sha256sum separates with two spaces
+            # or with the binary-mode star.
+            (cd built && for f in */*; do
+              echo "$(sha256sum "$f" | cut -d' ' -f1)  $(basename "$f")"
+            done)
             echo '```'
           } > notes.md
       - name: Publish

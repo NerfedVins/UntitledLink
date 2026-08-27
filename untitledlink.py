@@ -2505,6 +2505,8 @@ class App:
         if left:
             self.log(f"stopped {left} background process(es) on the way out")
         self.root.after_cancel(self.tick)  # otherwise pump fires post-destroy
+        if self.preview_tick:
+            self.root.after_cancel(self.preview_tick)
         self.root.destroy()
 
     def apply_private(self):
@@ -2974,7 +2976,7 @@ class App:
                                   command=lambda: self.copy_row("name"))
         self.tree.bind("<Button-3>", self.on_row_menu)
         self.tree.bind("<Button-1>", self.on_row_click)
-        self.tree.bind("<<TreeviewSelect>>", lambda _e: self.show_preview())
+        self.tree.bind("<<TreeviewSelect>>", self.preview_soon)
         self.tree.bind("<Double-1>", self.on_double_click)
         # Marking was mouse-only: arrow keys moved the selection but there was
         # no way to actually mark a row without clicking it.
@@ -2998,6 +3000,7 @@ class App:
         self.thumb_img = None   # the full-size PIL copy, to redraw on a resize
         self.thumb_cache: dict[str, object] = {}
         self.preview_token = 0  # ignore thumbnails that arrive after a new pick
+        self.preview_tick = None   # the pending "the selection has settled"
         wrap.bind("<Configure>", self.on_wrap_resize)
 
         # --- log panel, hidden until asked for or until something breaks ---
@@ -3454,7 +3457,24 @@ class App:
             self.source_line.pack_forget()
             self.tree.configure(displaycolumns=columns + ("name",))
 
+    def preview_soon(self, _event=None):
+        """Wait for the selection to settle before fetching anything.
+
+        Every row the selection passes through is a selection event, and each
+        one used to start a HEAD for the size and a thread for the thumbnail.
+        An arrow key held down through a two hundred row playlist is two
+        hundred of each, all but the last discarded by the token that arrives
+        after them - and over tor, slow and loud as well as wasted.
+
+        A tenth of a second of stillness is what says you have arrived at a
+        row rather than passed over it.
+        """
+        if self.preview_tick:
+            self.root.after_cancel(self.preview_tick)
+        self.preview_tick = self.root.after(150, self.show_preview)
+
     def show_preview(self):
+        self.preview_tick = None
         rows = self.tree.selection()
         if not rows:
             return
@@ -6097,6 +6117,15 @@ def ui_selftest():
         app.sort_rows("name")
         assert [i.name for i in app.items] == ["a.jpg", "b.mp4"]
         app.toggle_mark(rows[1], force=False)
+
+        # arrowing through a list must not start a fetch per row it passes
+        # over: one pending preview, replaced each time, not one per pick
+        before = len(root.tk.call("after", "info"))
+        for _row in (app.rows[0], app.rows[1], app.rows[0]):
+            app.tree.selection_set(_row)
+            root.update()
+        assert len(root.tk.call("after", "info")) == before + 1,             "three picks left more than one preview pending"
+        assert app.preview_tick, "nothing was scheduled at all"
 
         # right-click offers what the row already knows
         assert app.picked_item() is None or True

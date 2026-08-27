@@ -2412,6 +2412,12 @@ class App:
                 f"{APP}.{VERSION}")
         except Exception:
             pass       # not Windows, or an older shell: the icon is cosmetic
+        # Anything that raises inside a Tk callback - a button, a key, the
+        # queue pump - goes to stderr, and pythonw has no stderr. So a bad
+        # download folder made the download button do nothing at all: no
+        # message, no log line, no crash file. main() only catches what
+        # happens before the loop starts, which is the half that was covered.
+        root.report_callback_exception = self.mishap
         root.configure(bg=C["bg"])
         root.geometry("1140x700")
         root.minsize(940, 540)
@@ -3587,6 +3593,21 @@ class App:
         self.root.clipboard_append(self.log_text.get("1.0", "end").strip())
         self.say(self.t("log_copied"), C["cyan"])
 
+    def mishap(self, kind, value, tb):
+        """A Tk callback raised. Say it, log it, leave the trace on disk.
+
+        Not a dialog: half of these are one row failing to draw, and a modal
+        error for that is worse than the fault. The log opens itself on an
+        error line, which is the window's own way of saying something broke.
+        """
+        report = "".join(traceback.format_exception(kind, value, tb))
+        note_crash(report)
+        try:
+            self.log(report.rstrip(), "error")
+            self.say(self.t("went_wrong", err=value), C["red"])
+        except Exception:
+            pass        # mid-rebuild there may be no widgets to say it with
+
     def log(self, text, level="info"):
         self.q.put(("log", (level, text), None))
 
@@ -4492,7 +4513,11 @@ class App:
                     self.show_source_line(a)
         except queue.Empty:
             pass
-        self.tick = self.root.after(80, self.pump)
+        finally:
+            # In a finally because a handler above can raise: without this the
+            # queue loop dies with it and the window stops hearing from its own
+            # threads - downloads carry on and nothing on screen moves again.
+            self.tick = self.root.after(80, self.pump)
 
 
 # --------------------------------------------------------------------------
@@ -5379,11 +5404,19 @@ def ui_selftest():
     try:
         root.withdraw()
         callback_errors = []
-        root.report_callback_exception = lambda kind, value, tb: (
+
+        def collect(kind, value, tb):
             callback_errors.append("".join(
-                traceback.format_exception(kind, value, tb))))
+                traceback.format_exception(kind, value, tb)))
+
+        root.report_callback_exception = collect
 
         app = App(root)
+        # App installs a handler of its own, which would make the collector
+        # above - and the assertion at the end of this test that nothing
+        # raised - quietly stop seeing anything. The collector wins here; the
+        # handler itself is exercised on its own further down.
+        root.report_callback_exception = collect
         # Tk shows its window the moment it is created, so a small white square
         # sat on screen through the whole build and then jumped to full size.
         # App hides it and brings it back finished - and has to bring it back.
@@ -6084,6 +6117,33 @@ def ui_selftest():
         # during this run fails it now.
         assert not callback_errors, callback_errors[0]
 
+        # A callback that raises used to reach stderr, which pythonw does not
+        # have: the button did nothing and said nothing. It is a log line and a
+        # status line now, and the log opens itself on one.
+        was_private = PRIVATE
+        globals()["PRIVATE"] = True          # no crash file from a test
+        try:
+            app.log_frame.pack_forget()   # hidden, so opening it means this
+            app.mishap(ValueError, ValueError("boom"), None)
+            app.pump()
+            root.update_idletasks()
+            written = app.log_text.get("1.0", "end")
+        finally:
+            globals()["PRIVATE"] = was_private
+        assert "boom" in written, written[-200:]
+        assert "boom" in app.status.cget("text"), app.status.cget("text")
+        # winfo_manager rather than winfo_ismapped: a test window is not on
+        # anybody's screen, and ismapped answers for the screen
+        assert app.log_frame.winfo_manager() == "pack", "an error must open the log"
+
+        # and the pump survives it: a handler that raises used to take the
+        # reschedule with it, and the window stopped hearing from its threads
+        app.q.put(("no such kind", None, None))
+        app.pump()
+        app.q.put(("status", "still here", C["fg"]))
+        app.pump()
+        assert app.status.cget("text") == "still here", app.status.cget("text")
+
         app.close()   # remember() must not raise on the way out
         assert parked.wait(timeout=10) is not None, "close() left a child running"
         try:
@@ -6099,6 +6159,25 @@ def ui_selftest():
             pass
 
 
+def note_crash(report: str) -> None:
+    """Leave a traceback somewhere it can be read after the fact.
+
+    Never raises: this is called to report something that has already
+    gone wrong, and a failure here would replace a reported crash with an
+    unreported one. The private session writes nothing at all - a file
+    naming what you were doing is what it promises not to leave.
+    """
+    if PRIVATE:
+        return
+    try:
+        with open(os.path.join(DATA_DIR, "crash.log"), "a",
+                  encoding="utf-8") as fh:
+            stamp = time.strftime("%Y-%m-%d %H:%M:%S")
+            print("", stamp, report, sep="\n", file=fh)
+    except OSError:
+        pass
+
+
 def main():
     if "--selftest" in sys.argv:
         return selftest()
@@ -6111,15 +6190,7 @@ def main():
         # window appears would otherwise be nothing at all: no error, no
         # window, no clue. Leave a file and say so on screen.
         report = traceback.format_exc()
-        try:
-            if PRIVATE:
-                raise OSError("private mode: no crash file")
-            with open(os.path.join(DATA_DIR, "crash.log"), "a",
-                      encoding="utf-8") as fh:
-                stamp = time.strftime("%Y-%m-%d %H:%M:%S")
-                print("", stamp, report, sep="\n", file=fh)
-        except OSError:
-            pass
+        note_crash(report)
         try:
             messagebox.showerror(APP, report[-1500:])
         except Exception:

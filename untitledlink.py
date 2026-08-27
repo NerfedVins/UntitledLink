@@ -870,6 +870,25 @@ def with_circuit(proxy: str, tag: str) -> str:
     return f"{scheme}://{tag}:x@{host}"
 
 
+# How long to wait, before the route is taken into account. The page one was
+# 25s, which is under what a slow school or university server takes to answer
+# at all: sites.sch.gr was measured at 32s on a direct connection, so the
+# request was being abandoned while the site was still working on it.
+WAIT_PAGE = 45
+WAIT_HEAD = 20
+WAIT_FILE = 60
+
+
+def patience(proxy: str | None) -> float:
+    """Everything takes longer through three relays.
+
+    A scan of one page over Tor was measured at 12 seconds against tenths of a
+    second direct, so the timeouts that fit a direct connection are what turns
+    a slow site into a failed one the moment the switch goes on.
+    """
+    return 2.5 if proxy else 1.0
+
+
 def session_for(proxy: str | None) -> requests.Session:
     import requests
     s = requests.Session()
@@ -1141,9 +1160,10 @@ def head(s: requests.Session, url: str,
     import requests
     sent = {"Referer": referer} if referer else {}
     try:
-        r = s.head(url, timeout=12, allow_redirects=True, headers=sent)
+        wait = WAIT_HEAD * patience(getattr(s, "proxies", {}).get("https"))
+        r = s.head(url, timeout=wait, allow_redirects=True, headers=sent)
         if r.status_code >= 400:  # plenty of CDNs refuse HEAD
-            r = s.get(url, timeout=12, stream=True, headers=sent)
+            r = s.get(url, timeout=wait, stream=True, headers=sent)
             r.close()
         if r.status_code >= 400:
             return 0, "", ""
@@ -1338,7 +1358,15 @@ def scrape_page(url: str, proxy: str | None, log, embeds: bool = True,
     """
     s = session_for(proxy)
     # streamed so the body can be read in a bounded slice below
-    r = s.get(url, timeout=25, stream=True)
+    try:
+        r = s.get(url, timeout=WAIT_PAGE * patience(proxy), stream=True)
+    except requests.Timeout:
+        # Said in words, because the traceback underneath names a socket pool
+        # and a number of seconds and nothing anybody can act on.
+        raise RuntimeError(
+            f"{urlparse(url).netloc} did not answer in time"
+            + (" - it is slower through tor, try again or turn tor off"
+               if proxy else " - the site is slow or down, try again")) from None
     spoken = http_reason(r.status_code, TOR_MODE)
     if spoken:
         # This one reaches the status line, where "403 Client Error: Forbidden
@@ -2095,7 +2123,8 @@ def download_file(it: Item, outdir: str, proxy: str | None, clean: bool,
     if it.page:
         headers["Referer"] = it.page
 
-    with s.get(it.url, stream=True, timeout=40, headers=headers) as r:
+    with s.get(it.url, stream=True, timeout=WAIT_FILE * patience(proxy),
+               headers=headers) as r:
         if r.status_code in (429, 503):
             wait = retry_after(r, attempt)
             r.close()
@@ -4516,6 +4545,14 @@ def selftest():
         globals()["session_for"] = keep_session
     assert version_tuple("1.2.10") > version_tuple("1.2.9"), "not a string compare"
     assert version_tuple("v0.1.0") == (0, 1, 0) and version_tuple("") == ()
+
+    # a slow site is not a broken one, and a slow site over tor is slower
+    # still: sites.sch.gr answers in 32 seconds on a direct connection, which
+    # the old 25 second page timeout gave up on
+    assert WAIT_PAGE > 32, "a school server answers slower than this"
+    assert patience(None) == 1.0
+    assert patience("socks5h://127.0.0.1:9050") > 2, "three relays cost time"
+    assert WAIT_PAGE * patience("socks5h://x") > 100, "and a slow site over tor"
 
     # a status code, said to somebody waiting for a file
     assert "login" in http_reason(403) and "403" in http_reason(403)

@@ -3336,9 +3336,20 @@ class App:
         tk.Label(win, text=self.t("filters").upper(), bg=C["bg"],
                  fg=C["green"], font=self.fh, anchor="w").pack(
                      fill="x", padx=20, pady=(14, 0))
-        tk.Label(win, text=self.t("filters_hint"), bg=C["bg"], fg=C["dim"],
-                 font=self.f, anchor="w", justify="left").pack(
-                     fill="x", padx=20, pady=(2, 0))
+        # A Label does not wrap on its own, it just runs off the end of what it
+        # was given - and this sentence is wider than the card in both
+        # languages, so the last few words were being cut off. wraplength has
+        # to be a pixel count, and the only honest one is however wide the
+        # label turns out to be, which is not known until it is drawn.
+        hint = tk.Label(win, text=self.t("filters_hint"), bg=C["bg"],
+                        fg=C["dim"], font=self.f, anchor="w", justify="left")
+        hint.pack(fill="x", padx=20, pady=(2, 0))
+        # Minus its own chrome: wraplength limits the text, while the width the
+        # label is given has to hold the text plus padding and border. Six
+        # pixels of difference is the whole gap between wrapping and losing
+        # the last word off the end - which is where the English sat.
+        hint.bind("<Configure>", lambda e: e.widget.configure(
+            wraplength=max(1, e.width - 8)))
 
         foot = tk.Frame(win, bg=C["bg"])
         foot.pack(side="bottom", fill="x", padx=20, pady=(10, 14))

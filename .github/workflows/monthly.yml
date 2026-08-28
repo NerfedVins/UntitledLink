@@ -40,7 +40,7 @@ jobs:
           echo "::error::type go in the confirm field to publish a release"
           exit 1
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Move the version, or do not
         id: version

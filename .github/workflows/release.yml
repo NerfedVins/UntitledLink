@@ -23,8 +23,8 @@ jobs:
   windows:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.11"
       - run: .\build.bat
@@ -32,7 +32,7 @@ jobs:
       - name: The exe has to pass its own suite before anyone downloads it
         run: .\dist\UntitledLink.exe --selftest
         shell: cmd
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: windows
           path: dist/UntitledLink.exe
@@ -40,8 +40,8 @@ jobs:
   macos:
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.11"
       - run: python -m pip install -r requirements.txt pyinstaller pyinstaller-hooks-contrib
@@ -91,7 +91,7 @@ jobs:
         run: dist/UntitledLink.app/Contents/MacOS/UntitledLink --selftest
 
       - run: ditto -c -k --keepParent dist/UntitledLink.app UntitledLink-macos.zip
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: macos
           path: UntitledLink-macos.zip
@@ -103,8 +103,8 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
         with:
           path: built
       - name: Notes, with the checksums and the yt-dlp that went in

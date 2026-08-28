@@ -221,18 +221,27 @@ def resource(name: str) -> str:
 
 
 def _data_dir() -> str:
-    """Where settings and a fetched ffmpeg live.
+    """Where the settings, the downloads list and a crash file live.
 
-    Beside the app when that folder is writable, which keeps a portable copy on
-    a USB stick self-contained. Dropped into the user profile when it is not -
-    an exe in Program Files cannot write next to itself, and silently losing
-    every setting is a miserable way to find that out.
+    In the user's profile, which is where Windows - and every other desktop -
+    expects a program to keep its configuration. %APPDATA% here, ~/.config
+    elsewhere.
+
+    This used to be the folder the app sits in, so that a copy on a USB stick
+    was self-contained. The price was paid by everyone who did not have one: an
+    exe on the desktop wrote settings.json onto the desktop beside itself, and
+    an exe in Program Files could not write at all.
+
+    A fetched ffmpeg used to live here too. It comes from the imageio-ffmpeg
+    wheel now, so what is left is a few KB of text.
     """
-    if _writable(APP_DIR):
-        return APP_DIR
     base = os.environ.get("APPDATA") or os.path.join(os.path.expanduser("~"), ".config")
-    fallback = os.path.join(base, APP)
-    return fallback if _writable(fallback) else APP_DIR
+    home = os.path.join(base, APP)
+    if _writable(home):
+        return home
+    # No profile to write to at all. Beside the app is worse, but it beats
+    # having nowhere to put a setting.
+    return APP_DIR if _writable(APP_DIR) else home
 
 
 DATA_DIR = _data_dir()
@@ -242,6 +251,11 @@ PRIVATE = False
 
 SETTINGS_FILE = os.path.join(DATA_DIR, "settings.json")
 HISTORY_FILE = os.path.join(DATA_DIR, "history.json")
+# Where both of those used to live. Read when the new address has nothing, so
+# that moving them does not silently reset everything somebody had set - which
+# is a miserable way to find out that anything moved.
+OLD_SETTINGS_FILE = os.path.join(APP_DIR, "settings.json")
+OLD_HISTORY_FILE = os.path.join(APP_DIR, "history.json")
 
 # How many downloads the history remembers. Enough to find last week's lecture
 # in, short of a record of everything you have ever fetched.
@@ -250,12 +264,22 @@ DEFAULT_OUTDIR = os.path.join(os.path.expanduser("~"), "Downloads", APP)
 
 
 def load_settings() -> dict:
-    """Remembered preferences. Deliberately holds no link history."""
-    try:
-        with open(SETTINGS_FILE, encoding="utf-8") as fh:
-            return json.load(fh)
-    except (OSError, ValueError):
-        return {}
+    """Remembered preferences. Deliberately holds no link history.
+
+    The old address is read only when the new one holds nothing at all. A file
+    that is there and unreadable is answered with defaults, the same as before:
+    reaching further back for that one would quietly resurrect settings from
+    whenever the file was last whole.
+    """
+    for path in (SETTINGS_FILE, OLD_SETTINGS_FILE):
+        if not os.path.exists(path):
+            continue
+        try:
+            with open(path, encoding="utf-8") as fh:
+                return json.load(fh)
+        except (OSError, ValueError):
+            return {}
+    return {}
 
 
 def clamp_int(text, default: int, lo: int, hi: int) -> int:
@@ -270,12 +294,16 @@ def clamp_int(text, default: int, lo: int, hi: int) -> int:
 
 
 def load_history() -> list[dict]:
-    try:
-        with open(HISTORY_FILE, encoding="utf-8") as fh:
-            rows = json.load(fh)
-        return rows[-HISTORY_MAX:] if isinstance(rows, list) else []
-    except (OSError, ValueError):
-        return []
+    for path in (HISTORY_FILE, OLD_HISTORY_FILE):
+        if not os.path.exists(path):
+            continue
+        try:
+            with open(path, encoding="utf-8") as fh:
+                rows = json.load(fh)
+            return rows[-HISTORY_MAX:] if isinstance(rows, list) else []
+        except (OSError, ValueError):
+            return []
+    return []
 
 
 def save_history(rows: list[dict]) -> None:
@@ -5435,9 +5463,14 @@ def selftest():
     drop_part(nested, nest)
     assert not os.path.exists(litter), "the .part outlived the download"
 
-    global SETTINGS_FILE
-    keep = SETTINGS_FILE
-    SETTINGS_FILE = os.path.join(tempfile.mkdtemp(), "settings.json")
+    global SETTINGS_FILE, OLD_SETTINGS_FILE
+    keep, keep_old = SETTINGS_FILE, OLD_SETTINGS_FILE
+    room = tempfile.mkdtemp()
+    SETTINGS_FILE = os.path.join(room, "settings.json")
+    # Both, or this test reads the developer's own settings through the
+    # fallback and every assertion below becomes a coincidence.
+    OLD_SETTINGS_FILE = os.path.join(room, "old", "settings.json")
+    os.makedirs(os.path.dirname(OLD_SETTINGS_FILE), exist_ok=True)
     assert _writable(tempfile.gettempdir()), "temp must be writable"
     assert not _writable(os.path.join("Z:" if os.name == "nt" else "/proc/1",
                                       "no", "such", "place"))
@@ -5448,6 +5481,29 @@ def selftest():
         fh.write("{ not json")
     assert load_settings() == {}, "corrupt file must not raise"
 
+    # The settings moved out of the app's own folder and into the profile.
+    # Somebody upgrading has a file at the old address and nothing at the new
+    # one, and must not find every preference reset.
+    os.remove(SETTINGS_FILE)
+    with open(OLD_SETTINGS_FILE, "w") as fh:
+        fh.write('{"outdir": "D:/from-the-old-place", "parallel": 7}')
+    assert load_settings()["outdir"] == "D:/from-the-old-place",         "an upgrade lost the settings it was supposed to carry over"
+    # and the first save lands at the new address, not back at the old one
+    save_settings({"outdir": "D:/new"})
+    assert load_settings()["outdir"] == "D:/new", "the new file must win"
+    with open(OLD_SETTINGS_FILE, encoding="utf-8") as fh:
+        assert "from-the-old-place" in fh.read(), "the old file was written to"
+    # a file that is there and unreadable answers with defaults rather than
+    # reaching further back - resurrecting older settings is worse than none
+    with open(SETTINGS_FILE, "w") as fh:
+        fh.write("{ not json")
+    assert load_settings() == {}, "a corrupt new file must not fall back"
+    os.remove(SETTINGS_FILE)
+
+    # where it all goes by default: the profile, not the folder the app sits in
+    assert _data_dir() != APP_DIR or not _writable(
+        os.environ.get("APPDATA") or os.path.expanduser("~")),         f"settings still land beside the app: {_data_dir()}"
+
     # a hand-edited settings file, or anything typed into a Spinbox, reaches
     # these as text - none of it may reach tk as an int and blow up
     assert clamp_int("5", 3, 1, 10) == 5
@@ -5455,7 +5511,7 @@ def selftest():
     assert clamp_int(None, 3, 1, 10) == 3
     assert clamp_int("99", 3, 1, 10) == 10 and clamp_int("-4", 3, 1, 10) == 1
     assert clamp_int(7.9, 3, 1, 10) == 7, "floats truncate, they do not raise"
-    SETTINGS_FILE = keep
+    SETTINGS_FILE, OLD_SETTINGS_FILE = keep, keep_old
 
     ui_selftest()
     print("selftest ok")
@@ -5469,15 +5525,20 @@ def ui_selftest():
     """
     import tempfile
 
-    global SETTINGS_FILE, ffmpeg_path
-    keep_file, keep_ff = SETTINGS_FILE, ffmpeg_path
-    SETTINGS_FILE = os.path.join(tempfile.mkdtemp(), "settings.json")
+    global SETTINGS_FILE, OLD_SETTINGS_FILE, ffmpeg_path
+    keep_file, keep_old, keep_ff = SETTINGS_FILE, OLD_SETTINGS_FILE, ffmpeg_path
+    room = tempfile.mkdtemp()
+    SETTINGS_FILE = os.path.join(room, "settings.json")
+    # The old address too: left alone it points at the folder this file is in,
+    # and the window would come up wearing whoever ran the suite's own
+    # preferences instead of the defaults every assertion below expects.
+    OLD_SETTINGS_FILE = os.path.join(room, "old-settings.json")
     ffmpeg_path = lambda: "/nonexistent/ffmpeg"   # never fetch during a test
     try:
         root = tk.Tk()
     except tk.TclError:
         print("ui selftest skipped - no display")
-        SETTINGS_FILE, ffmpeg_path = keep_file, keep_ff
+        SETTINGS_FILE, OLD_SETTINGS_FILE, ffmpeg_path = keep_file, keep_old, keep_ff
         return
     try:
         root.withdraw()
@@ -6239,7 +6300,7 @@ def ui_selftest():
         except tk.TclError:
             pass          # destroyed, which is the point
     finally:
-        SETTINGS_FILE, ffmpeg_path = keep_file, keep_ff
+        SETTINGS_FILE, OLD_SETTINGS_FILE, ffmpeg_path = keep_file, keep_old, keep_ff
         try:
             root.destroy()
         except tk.TclError:

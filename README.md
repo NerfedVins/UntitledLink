@@ -72,7 +72,7 @@ one process while it runs, none after.
 
 Because `pythonw` has no console to print to, **nothing that goes wrong is
 allowed to go nowhere.** A crash before the window appears writes `crash.log`
-next to the app and shows the error in a dialog. Anything that raises after
+into that same settings folder and shows the error in a dialog. Anything that raises after
 that - a button, a key, the queue the background threads talk through - says so
 on the status line, writes its traceback to the log panel, which opens itself
 on an error, and leaves the same `crash.log`. Not a dialog for that half: most
@@ -96,10 +96,10 @@ Three flags matter and are easy to lose:
 The build refuses to continue if ffmpeg is missing rather than quietly shipping
 a crippled exe.
 
-**Where settings go.** Beside the exe when that folder is writable, so a copy on
-a USB stick stays self-contained. In `%APPDATA%\UntitledLink` when it is not - an exe
-in Program Files cannot write next to itself, and silently losing every setting
-is a miserable way to discover that.
+**Where settings go.** `%APPDATA%\UntitledLink\`, not beside the exe - so
+wherever you keep the exe stays as tidy as you left it. Beside the exe only if
+there is no profile to write to at all. See
+[What is remembered](#what-is-remembered).
 
 ## What it does
 
@@ -360,11 +360,21 @@ problem. A `.part` left by **cancelling** is kept, because that one still resume
 
 ## What is remembered
 
-`settings.json` sits next to the app and holds your **download folder**, proxy,
-quality, language, how many downloads run at once, how many tries each gets,
-and the strip-metadata, discreet-scan, subtitles and double-click toggles.
-Written when a download starts and when you close the window. Preferences only
-- **no link history**.
+`settings.json` holds your **download folder**, proxy, quality, language, how
+many downloads run at once, how many tries each gets, and the strip-metadata,
+discreet-scan, subtitles and double-click toggles. Written when a download
+starts and when you close the window. Preferences only - **no link history**.
+
+It lives in your profile - `%APPDATA%\UntitledLink\` on Windows,
+`~/.config/UntitledLink/` elsewhere - along with the downloads list, if you turn
+that on, and any crash file. A few KB of text, all of it.
+
+It used to sit in the app's own folder, so that a copy on a USB stick was
+self-contained. The price was paid by everyone who did not have one: an exe on
+the desktop wrote `settings.json` onto the desktop beside itself, and an exe in
+Program Files could not write at all. A file still at that old address is read
+when there is none at the new one, so moving house does not reset what you had
+set. The next save goes to the new place.
 
 Two are deliberately not remembered: the private session and tor. A privacy
 mode you get by accident, because it was on last week, is not one you can
@@ -399,8 +409,10 @@ Cancel puts back everything you touched, not just the file: every control
 writes straight into the value the app is using, so a tick you took back would
 otherwise stay on for the rest of the session.
 
-Everything is written to `settings.json` next to the app and reloaded on start,
-so your download folder is the one you picked last time.
+Everything is written to `settings.json` in your profile and reloaded on start,
+so your download folder is the one you picked last time. See
+[What is remembered](#what-is-remembered) for where exactly, and what is
+deliberately left out.
 
 ### Language
 

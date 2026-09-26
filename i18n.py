@@ -168,6 +168,8 @@ STRINGS = {
                           "Empty means the site sees your real IP.",
         "dlg_strip": "strip metadata from downloads",
         "dlg_strip_hint": "Removes EXIF, container tags and the Windows source marker.",
+        "dlg_upload_compatible": "make videos upload-compatible (H.264/AAC)",
+        "dlg_upload_compatible_hint": "Re-encodes videos as MP4 H.264/AAC. Slower and larger, but accepted by more sites.",
         "dlg_cookies": "use cookies from",
         "dlg_cookies_hint": "Needed for login-walled X, Instagram, private playlists.\n"
                             "WARNING: this identifies you to the site as your account.",
@@ -327,6 +329,8 @@ STRINGS = {
                           "Κενό σημαίνει ότι το site βλέπει την πραγματική σου IP.",
         "dlg_strip": "αφαίρεση metadata από τις λήψεις",
         "dlg_strip_hint": "Αφαιρεί EXIF, tags και τον δείκτη προέλευσης των Windows.",
+        "dlg_upload_compatible": "make videos upload-compatible (H.264/AAC)",
+        "dlg_upload_compatible_hint": "Re-encodes videos as MP4 H.264/AAC. Slower and larger, but accepted by more sites.",
         "dlg_cookies": "cookies από",
         "dlg_cookies_hint": "Χρειάζεται για κλειδωμένα X, Instagram, ιδιωτικές playlists.\n"
                             "ΠΡΟΣΟΧΗ: σε ταυτοποιεί στο site ως τον λογαριασμό σου.",
@@ -389,6 +393,8 @@ STRINGS = {
                           "Vacío significa que el sitio ve tu IP real.",
         "dlg_strip": "quitar metadatos de las descargas",
         "dlg_strip_hint": "Quita EXIF, etiquetas del contenedor y la marca de origen.",
+        "dlg_upload_compatible": "make videos upload-compatible (H.264/AAC)",
+        "dlg_upload_compatible_hint": "Re-encodes videos as MP4 H.264/AAC. Slower and larger, but accepted by more sites.",
         "dlg_cookies": "cookies de",
         "dlg_cookies_hint": "Necesario para X con login, Instagram y listas privadas.\n"
                             "AVISO: esto te identifica ante el sitio como tu cuenta.",
@@ -450,6 +456,8 @@ STRINGS = {
                           "Leer heisst, die Seite sieht deine echte IP.",
         "dlg_strip": "Metadaten aus Downloads entfernen",
         "dlg_strip_hint": "Entfernt EXIF, Container-Tags und die Windows-Herkunftsmarke.",
+        "dlg_upload_compatible": "make videos upload-compatible (H.264/AAC)",
+        "dlg_upload_compatible_hint": "Re-encodes videos as MP4 H.264/AAC. Slower and larger, but accepted by more sites.",
         "dlg_cookies": "Cookies von",
         "dlg_cookies_hint": "Nötig für gesperrtes X, Instagram und private Playlists.\n"
                             "WARNUNG: das identifiziert dich als dein Konto.",

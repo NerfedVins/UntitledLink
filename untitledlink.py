@@ -660,6 +660,23 @@ def strip_metadata(path: str) -> bool:
 
 
 # --------------------------------------------------------------------------
+def upload_mp4(path: str, clean: bool) -> str:
+    """Encode an upload-compatible H.264/AAC MP4."""
+    ff = ffmpeg_path()
+    if not ff: raise Permanent("H.264/AAC conversion needs ffmpeg")
+    root, ext = os.path.splitext(path); dest = path if ext.lower() == ".mp4" else unique_path(root + ".mp4"); tmp = root + ".converting.mp4"
+    cmd = [ff, "-y", "-loglevel", "error", "-i", path, "-map", "0:v:0", "-map", "0:a?", "-c:v", "libx264", "-preset", "medium", "-crf", "18", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart"]
+    if clean: cmd += ["-map_metadata", "-1"]
+    try:
+        done = quiet_run(cmd + [tmp], capture_output=True)
+        if done.returncode == 0 and os.path.getsize(tmp) > 0:
+            os.replace(tmp, dest)
+            if dest != path: os.remove(path)
+            if clean: scrub_mark_of_the_web(dest)
+            return dest
+    except OSError: pass
+    if os.path.exists(tmp): os.remove(tmp)
+    raise Permanent("H.264/AAC conversion failed")
 # scanning
 # --------------------------------------------------------------------------
 
@@ -2217,7 +2234,8 @@ def target_dir(outdir: str, it: Item, grouped: bool) -> str:
 
 
 def download_file(it: Item, outdir: str, proxy: str | None, clean: bool,
-                  progress, attempt: int = 1, cookies: str = "") -> str:
+                  progress, attempt: int = 1, cookies: str = "",
+                  compatible: bool = False) -> str:
     s = session_for(proxy, cookies)
     # Stable .part name so a retry picks up where the last attempt stopped;
     # the unique suffix is only decided once the file is whole.
@@ -2304,7 +2322,7 @@ def subtitle_opts(lang: str, wanted: bool) -> dict:
 
 def download_media(it: Item, outdir: str, proxy: str | None, quality: str,
                    clean: bool, progress, cookies: str = "",
-                   subs: str = "") -> str:
+                   subs: str = "", compatible: bool = False) -> str:
     from yt_dlp import YoutubeDL
 
     ff = ffmpeg_path()
@@ -2379,6 +2397,8 @@ def download_media(it: Item, outdir: str, proxy: str | None, quality: str,
         candidates.append(os.path.splitext(holder["path"])[0] + ".mp3")
     path = next((c for c in candidates if c and os.path.exists(c)), None)
     if path:
+        if compatible and it.kind == "video":
+            return upload_mp4(path, clean)
         if clean:
             strip_metadata(path)
         return path
@@ -2459,6 +2479,7 @@ class App:
             value=self.prefs.get("outdir") or DEFAULT_OUTDIR)
         self.proxy_var = tk.StringVar(value=self.prefs.get("proxy", ""))
         self.clean_var = tk.BooleanVar(value=self.prefs.get("strip_metadata", True))
+        self.upload_compatible_var = tk.BooleanVar(value=bool(self.prefs.get("upload_compatible", False)))
         self.cookies_var = tk.StringVar(
             value=self.prefs.get("cookies") or NO_COOKIES)
         # Off by default: a double click is easy to do by accident, and the
@@ -2590,6 +2611,7 @@ class App:
             "proxy": self.proxy_var.get().strip(),
             "quality": self.quality_var.get(),
             "strip_metadata": bool(self.clean_var.get()),
+            "upload_compatible": bool(self.upload_compatible_var.get()),
             "cookies": self.cookies(),
             "double_click_downloads": bool(self.dblclick_var.get()),
             "quiet_scan": bool(self.quiet_var.get()),
@@ -4031,6 +4053,8 @@ class App:
         # metadata + attempts ----------------------------------------------
         self.switch(body, "dlg_strip", self.clean_var)
         hint(self.t("dlg_strip_hint"))
+        self.switch(body, "dlg_upload_compatible", self.upload_compatible_var)
+        hint(self.t("dlg_upload_compatible_hint"))
 
         section(self.t("sec_window"))
         # language ---------------------------------------------------------
@@ -4051,7 +4075,7 @@ class App:
         # writing settings.json: a tick you took back stayed on for the rest of
         # the session, which is the one thing cancel promises not to do.
         touched = (self.outdir_var, self.proxy_var, self.quality_var,
-                   self.cookies_var, self.clean_var, self.private_var,
+                   self.cookies_var, self.clean_var, self.upload_compatible_var, self.private_var,
                    self.tor_var, self.dblclick_var, self.quiet_var,
                    self.subs_var, self.folders_var, self.keep_history_var,
                    self.parallel_var, self.attempts_var)
@@ -4329,11 +4353,11 @@ class App:
                   self.quality_var.get(), self.clean_var.get(),
                   self.cookies(), self.workers(), self.attempts(),
                   self.t.lang if self.subs_var.get() else "",
-                  bool(self.folders_var.get())),
+                  bool(self.folders_var.get()), bool(self.upload_compatible_var.get())),
             daemon=True).start()
 
     def _dl_worker(self, picks, outdir, proxy, quality, clean, cookies="",
-                   workers=PARALLEL, tries=ATTEMPTS, subs="", grouped=False):
+                   workers=PARALLEL, tries=ATTEMPTS, subs="", grouped=False, compatible=False):
         from concurrent.futures import ThreadPoolExecutor
 
         total_items = len(picks)
@@ -4415,12 +4439,12 @@ class App:
                         elif it.via == "ytdlp":
                             landed = download_media(it, where, proxy, quality,
                                                     clean, progress, cookies,
-                                                    subs)
+                                                    subs, compatible)
                         else:
                             with host_slot(it.url):
                                 landed = download_file(it, where, proxy, clean,
                                                        progress, attempt,
-                                                       cookies)
+                                                       cookies, compatible)
                         with lock:
                             tally["ok"] += 1
                         self.log(f"saved :: {it.name}", "ok")
